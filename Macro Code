@@ -588,9 +588,11 @@ class MacroMaker:
                             if m: 
                                 num = m.group(1)
                                 pyperclip.copy(num)
-                                self.master.after(0, lambda n=num: messagebox.showinfo("OCR Success", f"Copied 9-digit code: {n}"))
+                                # Silent success - just update status bar
+                                self.master.after(0, lambda n=num: self.update_status(f"OCR: Copied 9-digit code {n}"))
                             else: 
-                                self.master.after(0, lambda t=text: messagebox.showwarning("OCR Failed", f"No 9-digit number found in: {repr(t)}"))
+                                # Silent failure - just update status bar  
+                                self.master.after(0, lambda: self.update_status("OCR: No 9-digit number found"))
                                 
                     except Exception as e:
                         error_msg = f"Error executing {typ} action: {str(e)}"
