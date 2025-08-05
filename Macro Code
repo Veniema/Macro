@@ -1,8 +1,10 @@
 import tkinter as tk
-from tkinter import simpledialog, messagebox
+from tkinter import simpledialog, messagebox, filedialog
 import threading
 import time
 import re
+import json
+import sys
 
 from pynput import mouse
 import pyautogui
@@ -14,7 +16,8 @@ import pytesseract
 class MacroMaker:
     def __init__(self, master):
         self.master = master
-        master.title("Macro Maker Pro")
+        master.title("Macro Maker Pro v2.0")
+        master.geometry("900x600")
 
         # Actions: ('click', x, y), ('drag', (x1,y1),(x2,y2)), ('delay', secs),
         #          ('copy',), ('paste',), ('ocr', (x1,y1,x2,y2))
@@ -22,57 +25,252 @@ class MacroMaker:
         self.loop_count = 1
         self.auto_delay = tk.BooleanVar(value=False)
         self.auto_delay_time = tk.DoubleVar(value=0.5)
+        self.macro_running = False
+        self.macro_thread = None
+        self.current_file = None
 
-        # --- UI Layout ---
-        top_frame = tk.Frame(master)
-        top_frame.pack(pady=4)
-        btns = [
-            ("Record Click", self.record_click),
-            ("Record Drag",  self.record_drag),
-            ("Add Delay",    self.add_delay),
-            ("Insert Delay", self.insert_delay),
-            ("Copy",         self.record_copy),
-            ("Paste",        self.record_paste),
-            ("Record OCR Region", self.record_ocr),
-            ("Edit Action",  self.edit_action),
-            ("Delete Action",self.delete_action),
+        # --- Menu Bar ---
+        menubar = tk.Menu(master)
+        master.config(menu=menubar)
+        
+        file_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="File", menu=file_menu)
+        file_menu.add_command(label="New Macro (Ctrl+N)", command=self.new_macro)
+        file_menu.add_command(label="Open Macro (Ctrl+O)", command=self.load_macro)
+        file_menu.add_command(label="Save Macro (Ctrl+S)", command=self.save_macro)
+        file_menu.add_command(label="Save As...", command=self.save_macro_as)
+        file_menu.add_separator()
+        file_menu.add_command(label="Exit", command=master.quit)
+        
+        # Bind keyboard shortcuts
+        master.bind('<Control-n>', lambda e: self.new_macro())
+        master.bind('<Control-o>', lambda e: self.load_macro())
+        master.bind('<Control-s>', lambda e: self.save_macro())
+        master.bind('<Delete>', lambda e: self.delete_action())
+        master.bind('<F5>', lambda e: self.start_macro())
+        master.bind('<Escape>', lambda e: self.stop_macro())
+
+        # --- Status Bar ---
+        status_frame = tk.Frame(master)
+        status_frame.pack(fill=tk.X, padx=5, pady=2)
+        self.status_label = tk.Label(status_frame, text="Ready", relief=tk.SUNKEN, anchor=tk.W)
+        self.status_label.pack(fill=tk.X)
+
+        # --- Recording Buttons ---
+        record_frame = tk.Frame(master)
+        record_frame.pack(pady=4)
+        record_btns = [
+            ("🖱️ Click", self.record_click),
+            ("↗️ Drag", self.record_drag),
+            ("⏱️ Delay", self.add_delay),
+            ("📋 Copy", self.record_copy),
+            ("📄 Paste", self.record_paste),
+            ("👁️ OCR", self.record_ocr),
         ]
-        for i, (text, cmd) in enumerate(btns):
-            tk.Button(top_frame, text=text, command=cmd).grid(row=0, column=i, padx=4)
+        for i, (text, cmd) in enumerate(record_btns):
+            tk.Button(record_frame, text=text, command=cmd, width=8).grid(row=0, column=i, padx=2)
 
-        bottom_frame = tk.Frame(master)
-        bottom_frame.pack(pady=4)
-        tk.Button(bottom_frame, text="Move Up",        command=self.move_up).grid(row=0, column=0, padx=4)
-        tk.Button(bottom_frame, text="Move Down",      command=self.move_down).grid(row=0, column=1, padx=4)
-        tk.Button(bottom_frame, text="Set Loop Count", command=self.set_loop).grid(row=0, column=2, padx=4)
-        tk.Checkbutton(bottom_frame, text="Auto Add Delay", variable=self.auto_delay).grid(row=0, column=3, padx=4)
-        tk.Entry(bottom_frame, textvariable=self.auto_delay_time, width=5).grid(row=0, column=4)
-        tk.Button(bottom_frame, text="Start Macro ▶", command=self.start_macro).grid(row=0, column=5, padx=4)
-        tk.Button(bottom_frame, text="Clear All",      command=self.clear_actions).grid(row=0, column=6, padx=4)
+        # --- Action Control Buttons ---
+        control_frame = tk.Frame(master)
+        control_frame.pack(pady=4)
+        control_btns = [
+            ("✏️ Edit", self.edit_action),
+            ("🗑️ Delete", self.delete_action),
+            ("📋 Duplicate", self.duplicate_action),
+            ("⬆️ Move Up", self.move_up),
+            ("⬇️ Move Down", self.move_down),
+            ("💾 Insert Delay", self.insert_delay),
+        ]
+        for i, (text, cmd) in enumerate(control_btns):
+            tk.Button(control_frame, text=text, command=cmd, width=10).grid(row=0, column=i, padx=2)
 
-        self.loop_label = tk.Label(master, text=f"Loops: {self.loop_count}")
-        self.loop_label.pack()
+        # --- Execution Controls ---
+        exec_frame = tk.Frame(master)
+        exec_frame.pack(pady=4)
+        
+        tk.Label(exec_frame, text="Loops:").grid(row=0, column=0, padx=2)
+        tk.Button(exec_frame, text="Set Count", command=self.set_loop, width=8).grid(row=0, column=1, padx=2)
+        self.loop_label = tk.Label(exec_frame, text=f"{self.loop_count}", font=("Arial", 10, "bold"))
+        self.loop_label.grid(row=0, column=2, padx=5)
+        
+        tk.Checkbutton(exec_frame, text="Auto Delay", variable=self.auto_delay).grid(row=0, column=3, padx=5)
+        tk.Entry(exec_frame, textvariable=self.auto_delay_time, width=5).grid(row=0, column=4, padx=2)
+        tk.Label(exec_frame, text="s").grid(row=0, column=5)
+        
+        self.start_btn = tk.Button(exec_frame, text="▶️ Start (F5)", command=self.start_macro, 
+                                  bg="#4CAF50", fg="white", font=("Arial", 10, "bold"), width=12)
+        self.start_btn.grid(row=0, column=6, padx=5)
+        
+        self.stop_btn = tk.Button(exec_frame, text="⏹️ Stop (Esc)", command=self.stop_macro, 
+                                 bg="#f44336", fg="white", font=("Arial", 10, "bold"), width=12, state=tk.DISABLED)
+        self.stop_btn.grid(row=0, column=7, padx=5)
+        
+        tk.Button(exec_frame, text="🔍 Preview", command=self.preview_macro, width=8).grid(row=0, column=8, padx=2)
+        tk.Button(exec_frame, text="🗑️ Clear All", command=self.clear_actions, width=8).grid(row=0, column=9, padx=2)
 
-        self.listbox = tk.Listbox(master, width=100)
-        self.listbox.pack(padx=10, pady=10)
+        # --- Action List with Scrollbar ---
+        list_frame = tk.Frame(master)
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        scrollbar = tk.Scrollbar(list_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.listbox = tk.Listbox(list_frame, width=100, height=15, yscrollcommand=scrollbar.set,
+                                 font=("Consolas", 10), selectmode=tk.SINGLE)
+        self.listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=self.listbox.yview)
+        
+        # Right-click context menu
+        self.context_menu = tk.Menu(master, tearoff=0)
+        self.context_menu.add_command(label="Edit", command=self.edit_action)
+        self.context_menu.add_command(label="Duplicate", command=self.duplicate_action)  
+        self.context_menu.add_command(label="Insert Delay After", command=self.insert_delay)
+        self.context_menu.add_separator()
+        self.context_menu.add_command(label="Move Up", command=self.move_up)
+        self.context_menu.add_command(label="Move Down", command=self.move_down)
+        self.context_menu.add_separator()
+        self.context_menu.add_command(label="Delete", command=self.delete_action)
+        
+        self.listbox.bind("<Button-3>", self.show_context_menu)  # Right-click
+        self.listbox.bind("<Double-Button-1>", lambda e: self.edit_action())  # Double-click to edit
+        
+        self.update_status("Ready - Use File menu to save/load macros")
+
+    # --- Utility Methods ---
+    def update_status(self, message):
+        """Update the status bar with a message"""
+        self.status_label.config(text=message)
+        self.master.update_idletasks()
+
+    def show_context_menu(self, event):
+        """Show right-click context menu"""
+        try:
+            self.context_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.context_menu.grab_release()
+
+    # --- File Operations ---
+    def new_macro(self):
+        """Create a new macro"""
+        if self.actions and messagebox.askyesno("New Macro", "Clear current macro?"):
+            self.actions.clear()
+            self.listbox.delete(0, tk.END)
+            self.current_file = None
+            self.master.title("Macro Maker Pro v2.0 - New Macro")
+            self.update_status("New macro created")
+
+    def save_macro(self):
+        """Save current macro to file"""
+        if self.current_file:
+            self._save_to_file(self.current_file)
+        else:
+            self.save_macro_as()
+
+    def save_macro_as(self):
+        """Save current macro to a new file"""
+        if not self.actions:
+            messagebox.showwarning("Save", "No actions to save!")
+            return
+        
+        filename = filedialog.asksaveasfilename(
+            defaultextension=".json",
+            filetypes=[("Macro files", "*.json"), ("All files", "*.*")],
+            title="Save Macro As"
+        )
+        if filename:
+            self._save_to_file(filename)
+
+    def _save_to_file(self, filename):
+        """Internal method to save macro to file"""
+        try:
+            macro_data = {
+                "version": "2.0",
+                "actions": self.actions,
+                "loop_count": self.loop_count,
+                "auto_delay": self.auto_delay.get(),
+                "auto_delay_time": self.auto_delay_time.get()
+            }
+            with open(filename, 'w') as f:
+                json.dump(macro_data, f, indent=2)
+            
+            self.current_file = filename
+            self.master.title(f"Macro Maker Pro v2.0 - {filename}")
+            self.update_status(f"Saved: {filename}")
+            messagebox.showinfo("Save", f"Macro saved to {filename}")
+        except Exception as e:
+            messagebox.showerror("Save Error", f"Failed to save macro:\n{e}")
+
+    def load_macro(self):
+        """Load macro from file"""
+        if self.actions and not messagebox.askyesno("Load Macro", "Replace current macro?"):
+            return
+            
+        filename = filedialog.askopenfilename(
+            filetypes=[("Macro files", "*.json"), ("All files", "*.*")],
+            title="Load Macro"
+        )
+        if filename:
+            try:
+                with open(filename, 'r') as f:
+                    macro_data = json.load(f)
+                
+                self.actions = macro_data.get("actions", [])
+                self.loop_count = macro_data.get("loop_count", 1)
+                self.auto_delay.set(macro_data.get("auto_delay", False))
+                self.auto_delay_time.set(macro_data.get("auto_delay_time", 0.5))
+                
+                # Refresh UI
+                self.listbox.delete(0, tk.END)
+                for action in self.actions:
+                    self.listbox.insert(tk.END, self._format_action(action))
+                
+                self.loop_label.config(text=f"{self.loop_count}")
+                self.current_file = filename
+                self.master.title(f"Macro Maker Pro v2.0 - {filename}")
+                self.update_status(f"Loaded: {filename}")
+                messagebox.showinfo("Load", f"Macro loaded from {filename}")
+            except Exception as e:
+                messagebox.showerror("Load Error", f"Failed to load macro:\n{e}")
+
+    def _format_action(self, action):
+        """Format an action for display in the listbox"""
+        typ = action[0]
+        if typ == 'click':
+            return f"🖱️ Click at ({action[1]}, {action[2]})"
+        elif typ == 'drag':
+            return f"↗️ Drag from {action[1]} to {action[2]}"
+        elif typ == 'delay':
+            return f"⏱️ Delay {action[1]:.2f}s"
+        elif typ == 'copy':
+            return "📋 Copy (Ctrl+C)"
+        elif typ == 'paste':
+            return "📄 Paste (Ctrl+V)"
+        elif typ == 'ocr':
+            return f"👁️ OCR region: {action[1]}"
+        return str(action)
 
     def _maybe_auto_delay(self):
         if self.auto_delay.get():
             d = self.auto_delay_time.get()
             self.actions.append(('delay', d))
-            self.listbox.insert(tk.END, f"Delay {d:.2f} s (auto)")
+            self.listbox.insert(tk.END, f"⏱️ Delay {d:.2f}s (auto)")
 
+    # --- Recording Methods ---
     def record_click(self):
+        self.update_status("Click anywhere to record this click...")
         messagebox.showinfo("Record Click", "Click anywhere to record this click.")
         def on_click(x, y, button, pressed):
             if pressed:
-                self.actions.append(('click', x, y))
-                self.listbox.insert(tk.END, f"Click at ({x}, {y})")
+                action = ('click', x, y)
+                self.actions.append(action)
+                self.listbox.insert(tk.END, self._format_action(action))
                 self._maybe_auto_delay()
+                self.update_status("Click recorded successfully")
                 return False
         mouse.Listener(on_click=on_click).start()
 
     def record_drag(self):
+        self.update_status("Click and drag to record this action...")
         messagebox.showinfo("Record Drag", "Click and drag to record this action.")
         coords = []
         def on_click(x, y, button, pressed):
@@ -81,19 +279,30 @@ class MacroMaker:
             else:
                 coords.append((x, y))
                 if len(coords) == 2:
-                    self.actions.append(('drag', coords[0], coords[1]))
-                    self.listbox.insert(tk.END, f"Drag from {coords[0]} to {coords[1]}")
+                    action = ('drag', coords[0], coords[1])
+                    self.actions.append(action)
+                    self.listbox.insert(tk.END, self._format_action(action))
                     self._maybe_auto_delay()
+                    self.update_status("Drag recorded successfully")
                     return False
         mouse.Listener(on_click=on_click).start()
 
     def record_copy(self):
-        self.actions.append(('copy',)); self.listbox.insert(tk.END, "Copy"); self._maybe_auto_delay()
+        action = ('copy',)
+        self.actions.append(action)
+        self.listbox.insert(tk.END, self._format_action(action))
+        self._maybe_auto_delay()
+        self.update_status("Copy action added")
 
     def record_paste(self):
-        self.actions.append(('paste',)); self.listbox.insert(tk.END, "Paste"); self._maybe_auto_delay()
+        action = ('paste',)
+        self.actions.append(action) 
+        self.listbox.insert(tk.END, self._format_action(action))
+        self._maybe_auto_delay()
+        self.update_status("Paste action added")
 
     def record_ocr(self):
+        self.update_status("Click upper-left then lower-right to define OCR region...")
         messagebox.showinfo("Record OCR Region", "Click upper-left then release lower-right to define OCR region.")
         coords = []
         def on_click(x, y, button, pressed):
@@ -103,95 +312,308 @@ class MacroMaker:
                 coords.append((x, y))
                 if len(coords) == 2:
                     (x1, y1), (x2, y2) = coords
-                    self.actions.append(('ocr', (x1, y1, x2, y2)))
-                    self.listbox.insert(tk.END, f"OCR region: ({x1},{y1})-({x2},{y2})")
+                    action = ('ocr', (x1, y1, x2, y2))
+                    self.actions.append(action)
+                    self.listbox.insert(tk.END, self._format_action(action))
                     self._maybe_auto_delay()
+                    self.update_status("OCR region recorded successfully")
                     return False
         mouse.Listener(on_click=on_click).start()
 
     def add_delay(self):
-        d = simpledialog.askfloat("Delay (s)", "Seconds:", minvalue=0.0)
-        if d is not None: self.actions.append(('delay', d)); self.listbox.insert(tk.END, f"Delay {d:.2f} s")
+        d = simpledialog.askfloat("Delay (s)", "Enter delay in seconds:", minvalue=0.0, initialvalue=1.0)
+        if d is not None: 
+            action = ('delay', d)
+            self.actions.append(action)
+            self.listbox.insert(tk.END, self._format_action(action))
+            self.update_status(f"Added {d:.2f}s delay")
 
     def insert_delay(self):
-        sel = self.listbox.curselection();
-        if not sel: messagebox.showwarning("No Selection", "Select an action first."); return
-        d = simpledialog.askfloat("Insert Delay", "Seconds:", minvalue=0.0)
-        if d is not None: idx = sel[0]; self.actions.insert(idx, ('delay', d)); self.listbox.insert(idx, f"Delay {d:.2f} s")
+        sel = self.listbox.curselection()
+        if not sel: 
+            messagebox.showwarning("No Selection", "Select an action first.")
+            return
+        d = simpledialog.askfloat("Insert Delay", "Enter delay in seconds:", minvalue=0.0, initialvalue=1.0)
+        if d is not None: 
+            idx = sel[0] + 1  # Insert after selected item
+            action = ('delay', d)
+            self.actions.insert(idx, action)
+            self.listbox.insert(idx, self._format_action(action))
+            self.update_status(f"Inserted {d:.2f}s delay")
+
+    # --- New Action Management Methods ---
+    def duplicate_action(self):
+        """Duplicate the selected action"""
+        sel = self.listbox.curselection()
+        if not sel:
+            messagebox.showwarning("No Selection", "Select an action to duplicate.")
+            return
+        
+        idx = sel[0]
+        action = self.actions[idx].copy() if hasattr(self.actions[idx], 'copy') else tuple(self.actions[idx])
+        self.actions.insert(idx + 1, action)
+        self.listbox.insert(idx + 1, self._format_action(action) + " (copy)")
+        self.listbox.select_clear(0, tk.END)
+        self.listbox.select_set(idx + 1)
+        self.update_status("Action duplicated")
+
+    def preview_macro(self):
+        """Show a preview of what the macro will do without executing it"""
+        if not self.actions:
+            messagebox.showwarning("Empty", "No actions to preview.")
+            return
+        
+        preview_text = f"Macro Preview - Will execute {self.loop_count} time(s):\n\n"
+        for i, action in enumerate(self.actions, 1):
+            preview_text += f"{i:2d}. {self._format_action(action)}\n"
+        
+        preview_window = tk.Toplevel(self.master)
+        preview_window.title("Macro Preview")
+        preview_window.geometry("500x400")
+        
+        text_widget = tk.Text(preview_window, wrap=tk.WORD, font=("Consolas", 10))
+        text_widget.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        text_widget.insert(tk.END, preview_text)
+        text_widget.config(state=tk.DISABLED)
+        
+        tk.Button(preview_window, text="Close", command=preview_window.destroy).pack(pady=5)
+
+    def stop_macro(self):
+        """Stop the currently running macro"""
+        if self.macro_running:
+            self.macro_running = False
+            self.start_btn.config(state=tk.NORMAL)
+            self.stop_btn.config(state=tk.DISABLED)
+            self.update_status("Macro stopped by user")
+            messagebox.showinfo("Stopped", "Macro execution stopped.")
+        else:
+            self.update_status("No macro is currently running")
 
     def edit_action(self):
-        sel = self.listbox.curselection();
-        if not sel: messagebox.showwarning("No Selection","Select an action to edit."); return
-        i = sel[0]; act = self.actions[i]; typ = act[0]
+        """Edit the selected action"""
+        sel = self.listbox.curselection()
+        if not sel: 
+            messagebox.showwarning("No Selection", "Select an action to edit.")
+            return
+        
+        i = sel[0]
+        act = self.actions[i]
+        typ = act[0]
+        
         if typ == 'click':
-            x = simpledialog.askinteger("Edit Click X","New X:",initialvalue=act[1]); y = simpledialog.askinteger("Edit Click Y","New Y:",initialvalue=act[2])
-            if x is not None and y is not None: self.actions[i] = ('click', x, y); self.listbox.delete(i); self.listbox.insert(i, f"Click at ({x}, {y})")
+            x = simpledialog.askinteger("Edit Click X", "New X coordinate:", initialvalue=act[1])
+            y = simpledialog.askinteger("Edit Click Y", "New Y coordinate:", initialvalue=act[2])
+            if x is not None and y is not None: 
+                self.actions[i] = ('click', x, y)
+                self.listbox.delete(i)
+                self.listbox.insert(i, self._format_action(self.actions[i]))
+                self.listbox.select_set(i)
+                self.update_status("Click action edited")
         elif typ == 'drag':
             (x1, y1), (x2, y2) = act[1], act[2]
-            nx1 = simpledialog.askinteger("Edit Drag X1","New start X:",initialvalue=x1)
-            ny1 = simpledialog.askinteger("Edit Drag Y1","New start Y:",initialvalue=y1)
-            nx2 = simpledialog.askinteger("Edit Drag X2","New end X:",initialvalue=x2)
-            ny2 = simpledialog.askinteger("Edit Drag Y2","New end Y:",initialvalue=y2)
-            if None not in (nx1,ny1,nx2,ny2): self.actions[i] = ('drag',(nx1,ny1),(nx2,ny2)); self.listbox.delete(i); self.listbox.insert(i, f"Drag from ({nx1},{ny1}) to ({nx2},{ny2})")
+            nx1 = simpledialog.askinteger("Edit Drag Start X", "New start X:", initialvalue=x1)
+            ny1 = simpledialog.askinteger("Edit Drag Start Y", "New start Y:", initialvalue=y1)
+            nx2 = simpledialog.askinteger("Edit Drag End X", "New end X:", initialvalue=x2)
+            ny2 = simpledialog.askinteger("Edit Drag End Y", "New end Y:", initialvalue=y2)
+            if None not in (nx1, ny1, nx2, ny2): 
+                self.actions[i] = ('drag', (nx1, ny1), (nx2, ny2))
+                self.listbox.delete(i)
+                self.listbox.insert(i, self._format_action(self.actions[i]))
+                self.listbox.select_set(i)
+                self.update_status("Drag action edited")
         elif typ == 'delay':
-            d = simpledialog.askfloat("Edit Delay","New delay:",initialvalue=act[1],minvalue=0.0)
-            if d is not None: self.actions[i] = ('delay',d); self.listbox.delete(i); self.listbox.insert(i, f"Delay {d:.2f} s")
-        else: messagebox.showinfo("No Edit", f"'{typ}' has no parameters to edit.")
+            d = simpledialog.askfloat("Edit Delay", "New delay (seconds):", initialvalue=act[1], minvalue=0.0)
+            if d is not None: 
+                self.actions[i] = ('delay', d)
+                self.listbox.delete(i)
+                self.listbox.insert(i, self._format_action(self.actions[i]))
+                self.listbox.select_set(i)
+                self.update_status("Delay action edited")
+        elif typ == 'ocr':
+            x1, y1, x2, y2 = act[1]
+            nx1 = simpledialog.askinteger("Edit OCR X1", "New top-left X:", initialvalue=x1)
+            ny1 = simpledialog.askinteger("Edit OCR Y1", "New top-left Y:", initialvalue=y1)
+            nx2 = simpledialog.askinteger("Edit OCR X2", "New bottom-right X:", initialvalue=x2)
+            ny2 = simpledialog.askinteger("Edit OCR Y2", "New bottom-right Y:", initialvalue=y2)
+            if None not in (nx1, ny1, nx2, ny2):
+                self.actions[i] = ('ocr', (nx1, ny1, nx2, ny2))
+                self.listbox.delete(i)
+                self.listbox.insert(i, self._format_action(self.actions[i]))
+                self.listbox.select_set(i)
+                self.update_status("OCR action edited")
+        else: 
+            messagebox.showinfo("No Edit", f"'{typ}' action has no parameters to edit.")
 
     def delete_action(self):
-        sel = self.listbox.curselection();
-        if not sel: return
-        i = sel[0]; del self.actions[i]; self.listbox.delete(i)
+        """Delete the selected action"""
+        sel = self.listbox.curselection()
+        if not sel: 
+            messagebox.showwarning("No Selection", "Select an action to delete.")
+            return
+        i = sel[0]
+        del self.actions[i]
+        self.listbox.delete(i)
+        self.update_status("Action deleted")
 
     def move_up(self):
-        sel = self.listbox.curselection();
-        if not sel or sel[0]==0: return
-        i = sel[0]; self.actions[i-1],self.actions[i]=self.actions[i],self.actions[i-1]
-        prev,cur=self.listbox.get(i-1),self.listbox.get(i)
-        self.listbox.delete(i-1,i); self.listbox.insert(i-1,cur); self.listbox.insert(i,prev); self.listbox.select_set(i-1)
+        """Move selected action up in the list"""
+        sel = self.listbox.curselection()
+        if not sel or sel[0] == 0: 
+            return
+        i = sel[0]
+        self.actions[i-1], self.actions[i] = self.actions[i], self.actions[i-1]
+        self.listbox.delete(i-1, i)
+        self.listbox.insert(i-1, self._format_action(self.actions[i-1]))
+        self.listbox.insert(i, self._format_action(self.actions[i]))
+        self.listbox.select_set(i-1)
+        self.update_status("Action moved up")
 
     def move_down(self):
-        sel=self.listbox.curselection();
-        if not sel or sel[0]==len(self.actions)-1: return
-        i=sel[0]; self.actions[i],self.actions[i+1]=self.actions[i+1],self.actions[i]
-        cur,nxt=self.listbox.get(i),self.listbox.get(i+1)
-        self.listbox.delete(i,i+1); self.listbox.insert(i,nxt); self.listbox.insert(i+1,cur); self.listbox.select_set(i+1)
+        """Move selected action down in the list"""
+        sel = self.listbox.curselection()
+        if not sel or sel[0] == len(self.actions) - 1: 
+            return
+        i = sel[0]
+        self.actions[i], self.actions[i+1] = self.actions[i+1], self.actions[i]
+        self.listbox.delete(i, i+1)
+        self.listbox.insert(i, self._format_action(self.actions[i]))
+        self.listbox.insert(i+1, self._format_action(self.actions[i+1]))
+        self.listbox.select_set(i+1)
+        self.update_status("Action moved down")
 
     def set_loop(self):
-        n=simpledialog.askinteger("Loop Count","How many times to repeat?",minvalue=1)
-        if n is not None: self.loop_count=n; self.loop_label.config(text=f"Loops: {self.loop_count}")
+        """Set the number of times to repeat the macro"""
+        n = simpledialog.askinteger("Loop Count", "How many times to repeat the macro?", 
+                                   initialvalue=self.loop_count, minvalue=1, maxvalue=1000)
+        if n is not None: 
+            self.loop_count = n
+            self.loop_label.config(text=f"{self.loop_count}")
+            self.update_status(f"Loop count set to {n}")
 
     def clear_actions(self):
-        if messagebox.askyesno("Clear All","Delete all recorded actions?"): self.actions.clear(); self.listbox.delete(0,tk.END)
+        """Clear all recorded actions"""
+        if messagebox.askyesno("Clear All", "Delete all recorded actions?"):
+            self.actions.clear()
+            self.listbox.delete(0, tk.END)
+            self.update_status("All actions cleared")
 
     def start_macro(self):
-        if not self.actions: messagebox.showwarning("Empty","No actions to play."); return
-        threading.Thread(target=self.run_macro).start()
+        """Start executing the macro"""
+        if not self.actions:
+            messagebox.showwarning("Empty", "No actions to execute!")
+            return
+        
+        if self.macro_running:
+            messagebox.showwarning("Already Running", "Macro is already running!")
+            return
+            
+        self.macro_running = True
+        self.start_btn.config(state=tk.DISABLED)
+        self.stop_btn.config(state=tk.NORMAL)
+        self.update_status(f"Starting macro execution ({self.loop_count} loops)...")
+        
+        self.macro_thread = threading.Thread(target=self.run_macro)
+        self.macro_thread.daemon = True
+        self.macro_thread.start()
 
     def run_macro(self):
-        time.sleep(2)
-        for _ in range(self.loop_count):
-            for act in self.actions:
-                typ = act[0]
-                if typ == 'click': _,x,y=act; pyautogui.click(x,y)
-                elif typ == 'drag': _,(x1,y1),(x2,y2)=act; left,top=min(x1,x2),min(y1,y2); width,height=abs(x2-x1),abs(y2-y1)
-                pyautogui.mouseDown(left,top); pyautogui.moveTo(left+width,top+height,duration=0.1); pyautogui.mouseUp()
-                elif typ=='delay': time.sleep(act[1])
-                elif typ=='copy': pyautogui.hotkey('ctrl','c')
-                elif typ=='paste': pyautogui.hotkey('ctrl','v')
-                elif typ=='ocr':
-                x1,y1,x2,y2=act[1]
-                left,top=min(x1,x2),min(y1,y2)
-                width,height=abs(x2-x1),abs(y2-y1)
-                try:
-                    with mss.mss() as sct:
-                        monitor={'top':top,'left':left,'width':width,'height':height}
-                        sct_img=sct.grab(monitor); img=Image.frombytes('RGB',sct_img.size,sct_img.rgb)
-                    img.show(); text=pytesseract.image_to_string(img)
-                    m=re.search(r"(\d{9})",text)
-                    if m: num=m.group(1); pyperclip.copy(num); self.master.after(0,lambda n=num:messagebox.showinfo("OCR Copied",f"Copied: {n}"))
-                    else: self.master.after(0,lambda:messagebox.showwarning("OCR","No 9-digit number found"))
-                except Exception as e: self.master.after(0,lambda exc=e:messagebox.showerror("OCR Error",str(exc)))
+        """Execute the macro actions"""
+        try:
+            # Initial delay to let user prepare
+            for i in range(3, 0, -1):
+                if not self.macro_running:
+                    return
+                self.master.after(0, lambda cnt=i: self.update_status(f"Starting in {cnt}..."))
+                time.sleep(1)
+            
+            total_actions = len(self.actions) * self.loop_count
+            action_count = 0
+            
+            for loop in range(self.loop_count):
+                if not self.macro_running:
+                    break
+                    
+                self.master.after(0, lambda l=loop+1: self.update_status(f"Executing loop {l}/{self.loop_count}"))
+                
+                for i, act in enumerate(self.actions):
+                    if not self.macro_running:
+                        break
+                        
+                    action_count += 1
+                    progress = f"Action {action_count}/{total_actions}"
+                    self.master.after(0, lambda p=progress: self.update_status(p))
+                    
+                    typ = act[0]
+                    try:
+                        if typ == 'click': 
+                            _, x, y = act
+                            pyautogui.click(x, y)
+                            
+                        elif typ == 'drag': 
+                            _, (x1, y1), (x2, y2) = act
+                            pyautogui.mouseDown(x1, y1)
+                            pyautogui.moveTo(x2, y2, duration=0.1)
+                            pyautogui.mouseUp()
+                            
+                        elif typ == 'delay': 
+                            delay_time = act[1]
+                            # Break delay into smaller chunks to allow stopping
+                            steps = max(1, int(delay_time * 10))  # 0.1s chunks
+                            for _ in range(steps):
+                                if not self.macro_running:
+                                    break
+                                time.sleep(delay_time / steps)
+                                
+                        elif typ == 'copy': 
+                            pyautogui.hotkey('ctrl', 'c')
+                            
+                        elif typ == 'paste': 
+                            pyautogui.hotkey('ctrl', 'v')
+                            
+                        elif typ == 'ocr':
+                            x1, y1, x2, y2 = act[1]
+                            left, top = min(x1, x2), min(y1, y2)
+                            width, height = abs(x2 - x1), abs(y2 - y1)
+                            
+                            with mss.mss() as sct:
+                                monitor = {'top': top, 'left': left, 'width': width, 'height': height}
+                                sct_img = sct.grab(monitor)
+                                img = Image.frombytes('RGB', sct_img.size, sct_img.rgb)
+                            
+                            # Enhanced OCR with multiple attempts
+                            text = pytesseract.image_to_string(img, config='--psm 6')
+                            print(f"OCR extracted text: '{text}'")  # Debug output
+                            
+                            m = re.search(r'\b(\d{9})\b', text)
+                            if m: 
+                                num = m.group(1)
+                                pyperclip.copy(num)
+                                self.master.after(0, lambda n=num: messagebox.showinfo("OCR Success", f"Copied 9-digit code: {n}"))
+                            else: 
+                                self.master.after(0, lambda t=text: messagebox.showwarning("OCR Failed", f"No 9-digit number found in: {repr(t)}"))
+                                
+                    except Exception as e:
+                        error_msg = f"Error executing {typ} action: {str(e)}"
+                        print(error_msg)
+                        self.master.after(0, lambda msg=error_msg: messagebox.showerror("Execution Error", msg))
+                        
+            # Macro completed
+            if self.macro_running:
+                self.master.after(0, lambda: self.update_status("Macro completed successfully!"))
+                self.master.after(0, lambda: messagebox.showinfo("Complete", "Macro execution finished!"))
+            
+        except Exception as e:
+            error_msg = f"Fatal error during macro execution: {str(e)}"
+            print(error_msg)
+            self.master.after(0, lambda msg=error_msg: messagebox.showerror("Fatal Error", msg))
+            
+        finally:
+            # Reset UI state
+            self.macro_running = False
+            self.master.after(0, lambda: self.start_btn.config(state=tk.NORMAL))
+            self.master.after(0, lambda: self.stop_btn.config(state=tk.DISABLED))
+            if not self.macro_running:
+                self.master.after(0, lambda: self.update_status("Ready"))
 
 if __name__ == "__main__":
     root=tk.Tk(); app=MacroMaker(root); root.mainloop()
