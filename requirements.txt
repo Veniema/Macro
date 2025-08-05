@@ -1,0 +1,13 @@
+# Required packages for Macro Maker Pro
+tkinter  # Usually comes with Python
+pynput>=1.7.6
+pyautogui>=0.9.54
+pyperclip>=1.8.2
+mss>=6.1.0
+Pillow>=9.0.0
+pytesseract>=0.3.10
+
+# Note: You also need to install Tesseract OCR separately:
+# Windows: Download from https://github.com/UB-Mannheim/tesseract/wiki
+# Mac: brew install tesseract
+# Linux: sudo apt-get install tesseract-ocr
