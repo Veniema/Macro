@@ -584,7 +584,7 @@ class MacroMaker:
                             text = pytesseract.image_to_string(img, config='--psm 6')
                             print(f"OCR extracted text: '{text}'")  # Debug output
                             
-                            # Look for 7, 8, or 9 digit numbers
+                            # Look for 6, 7, 8, or 9 digit numbers
                             found_number = None
                             
                             # First try to find 9-digit number
@@ -604,6 +604,12 @@ class MacroMaker:
                                     if m7:
                                         found_number = "00" + m7.group(1)
                                         print(f"Found 7-digit number: {m7.group(1)} -> padded to: {found_number}")
+                                    else:
+                                        # Try to find 6-digit number and pad with 3 zeros
+                                        m6 = re.search(r'\b(\d{6})\b', text)
+                                        if m6:
+                                            found_number = "000" + m6.group(1)
+                                            print(f"Found 6-digit number: {m6.group(1)} -> padded to: {found_number}")
                             
                             if found_number: 
                                 pyperclip.copy(found_number)
@@ -611,7 +617,7 @@ class MacroMaker:
                                 self.master.after(0, lambda n=found_number: self.update_status(f"OCR: Copied 9-digit code {n}"))
                             else: 
                                 # Silent failure - just update status bar  
-                                self.master.after(0, lambda: self.update_status("OCR: No 7-9 digit number found"))
+                                self.master.after(0, lambda: self.update_status("OCR: No 6-9 digit number found"))
                                 
                     except Exception as e:
                         error_msg = f"Error executing {typ} action: {str(e)}"
