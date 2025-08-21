@@ -5,6 +5,8 @@ import time
 import re
 import json
 import sys
+import os
+import numpy as np
 
 from pynput import mouse
 import pyautogui
@@ -20,7 +22,8 @@ class MacroMaker:
         master.geometry("900x600")
 
         # Actions: ('click', x, y), ('drag', (x1,y1),(x2,y2)), ('delay', secs),
-        #          ('copy',), ('paste',), ('ocr', (x1,y1,x2,y2))
+        #          ('copy',), ('paste',), ('ocr', (x1,y1,x2,y2)),
+        #          ('img_check', image_path, (x1,y1,x2,y2), sub_actions, threshold)
         self.actions = []
         self.loop_count = 1
         self.auto_delay = tk.BooleanVar(value=False)
@@ -66,8 +69,273 @@ class MacroMaker:
             ("📋 Copy", self.record_copy),
             ("📄 Paste", self.record_paste),
             ("👁️ OCR", self.record_ocr),
+            ("🔍 Img Check", self.record_img_check),
         ]
         for i, (text, cmd) in enumerate(record_btns):
+            tk.Button(record_frame, text=text, command=cmd, width=8).grid(row=0, column=i, padx=2)
+
+        # --- Action Control Buttons ---
+        control_frame = tk.Frame(master)
+        control_frame.pack(pady=4)
+        control_btns = [
+            ("✏️ Edit", self.edit_action),
+            ("🗑️ Delete", self.delete_action),
+            ("📋 Duplicate", self.duplicate_action),
+            ("⬆️ Move Up", self.move_up),
+            ("⬇️ Move Down", self.move_down),
+            ("💾 Insert Delay", self.insert_delay),
+        ]
+        for i, (text, cmd) in enumerate(control_btns):
+            tk.Button(control_frame, text=text, command=cmd, width=10).grid(row=0, column=i, padx=2)
+
+        # --- Execution Controls ---
+        exec_frame = tk.Frame(master)
+        exec_frame.pack(pady=4)
+        
+        tk.Label(exec_frame, text="Loops:").grid(row=0, column=0, padx=2)
+        tk.Button(exec_frame, text="Set Count", command=self.set_loop, width=8).grid(row=0, column=1, padx=2)
+        self.loop_label = tk.Label(exec_frame, text=f"{self.loop_count}", font=("Arial", 10, "bold"))
+        self.loop_label.grid(row=0, column=2, padx=5)
+        
+        tk.Checkbutton(exec_frame, text="Auto Delay", variable=self.auto_delay).grid(row=0, column=3, padx=5)
+        tk.Entry(exec_frame, textvariable=self.auto_delay_time, width=5).grid(row=0, column=4, padx=2)
+        tk.Label(exec_frame, text="s").grid(row=0, column=5)
+        
+        self.start_btn = tk.Button(exec_frame, text="▶️ Start (F5)", command=self.start_macro, 
+                                  font=("Arial", 10, "bold"), width=12)
+        self.start_btn.grid(row=0, column=6, padx=5)
+        self.stop_btn = tk.Button(exec_frame, text="⏸️ Stop (Esc)", command=self.stop_macro, 
+                                 font=("Arial", 10, "bold"), width=12, state=tk.DISABLED)
+        self.stop_btn.grid(row=0, column=7, padx=5)
+
+        # --- Actions Listbox ---
+        list_frame = tk.Frame(master)
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # Scrollable listbox
+        self.listbox = tk.Listbox(list_frame, selectmode=tk.SINGLE, font=("Courier", 9))
+        scrollbar = tk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.listbox.yview)
+        self.listbox.config(yscrollcommand=scrollbar.set)
+        
+        self.listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+    def record_img_check(self):
+        """Record an image check action with branching logic"""
+        # First, let user select reference image
+        image_path = filedialog.askopenfilename(
+            filetypes=[("Image files", "*.png *.jpg *.jpeg *.bmp *.gif"), ("All files", "*.*")],
+            title="Select Reference Image"
+        )
+        if not image_path:
+            self.update_status("Image check cancelled")
+            return
+            
+        self.update_status("Click and drag to define search region...")
+        messagebox.showinfo("Define Search Region", 
+                          "Click and drag to define the region where the image should be found.")
+        
+        coords = []
+        def on_click(x, y, button, pressed):
+            if pressed:
+                coords.clear()
+                coords.append((x, y))
+            else:
+                coords.append((x, y))
+                if len(coords) == 2:
+                    self._finish_img_check_recording(coords, image_path)
+                    return False
+        mouse.Listener(on_click=on_click).start()
+
+    def _compare_images(self, reference_path, screenshot_region, threshold=0.8):
+        """Compare reference image with screenshot region using template matching"""
+        try:
+            # Load reference image
+            if not os.path.exists(reference_path):
+                print(f"Reference image not found: {reference_path}")
+                return False
+                
+            ref_img = Image.open(reference_path)
+            ref_array = np.array(ref_img)
+            
+            # Convert screenshot region to numpy array
+            screen_array = np.array(screenshot_region)
+            
+            # Convert to grayscale for template matching
+            if len(ref_array.shape) == 3:
+                ref_gray = np.dot(ref_array[...,:3], [0.299, 0.587, 0.114])
+            else:
+                ref_gray = ref_array
+                
+            if len(screen_array.shape) == 3:
+                screen_gray = np.dot(screen_array[...,:3], [0.299, 0.587, 0.114])
+            else:
+                screen_gray = screen_array
+            
+            # Simple correlation-based matching
+            # If reference is larger than screen region, return False
+            if ref_gray.shape[0] > screen_gray.shape[0] or ref_gray.shape[1] > screen_gray.shape[1]:
+                return False
+            
+            # Calculate normalized cross-correlation
+            from scipy import ndimage
+            try:
+                # Use scipy if available for better matching
+                correlation = ndimage.correlate(screen_gray, ref_gray, mode='constant')
+                max_correlation = correlation.max()
+                
+                # Normalize correlation value
+                ref_sum = (ref_gray ** 2).sum()
+                screen_sum = (screen_gray ** 2).sum()
+                
+                if ref_sum == 0 or screen_sum == 0:
+                    return False
+                    
+                normalized_correlation = max_correlation / (ref_sum * screen_sum) ** 0.5
+                
+            except ImportError:
+                # Fallback to simple pixel-by-pixel comparison
+                if ref_gray.shape != screen_gray.shape:
+                    # Resize reference to match screen region
+                    ref_img_resized = ref_img.resize(screen_array.shape[1::-1])
+                    ref_array_resized = np.array(ref_img_resized)
+                    if len(ref_array_resized.shape) == 3:
+                        ref_gray = np.dot(ref_array_resized[...,:3], [0.299, 0.587, 0.114])
+                    else:
+                        ref_gray = ref_array_resized
+                
+                # Simple pixel difference calculation
+                diff = np.abs(ref_gray - screen_gray)
+                similarity = 1.0 - (diff.mean() / 255.0)
+                normalized_correlation = similarity
+            
+            print(f"Image similarity: {normalized_correlation:.3f}, threshold: {threshold}")
+            return normalized_correlation >= threshold
+            
+        except Exception as e:
+            print(f"Error comparing images: {e}")
+            return False
+
+    def _finish_img_check_recording(self, coords, image_path):
+        """Complete the image check recording process"""
+        (x1, y1), (x2, y2) = coords
+        
+        # Get similarity threshold from user
+        threshold = simpledialog.askfloat(
+            "Image Similarity", 
+            "Enter similarity threshold (0.0-1.0, higher = more strict):",
+            initialvalue=0.8,
+            minvalue=0.0,
+            maxvalue=1.0
+        )
+        if threshold is None:
+            threshold = 0.8
+        
+        # Create dialog for sub-actions
+        sub_actions = self._create_sub_actions_dialog()
+        
+        action = ('img_check', image_path, (x1, y1, x2, y2), sub_actions, threshold)
+        self.actions.append(action)
+        self.listbox.insert(tk.END, self._format_action(action))
+        self._maybe_auto_delay()
+        
+        img_name = os.path.basename(image_path)
+        self.update_status(f"Image check added: {img_name} with {len(sub_actions)} sub-actions")
+
+    def _create_sub_actions_dialog(self):
+        """Create a dialog to define sub-actions for image check branching"""
+        sub_actions = []
+        
+        # Create a simple dialog window
+        dialog = tk.Toplevel(self.master)
+        dialog.title("Define Sub-Actions")
+        dialog.geometry("600x400")
+        dialog.transient(self.master)
+        dialog.grab_set()
+        
+        tk.Label(dialog, text="Define actions to execute when image IS found:", 
+                font=("Arial", 12, "bold")).pack(pady=10)
+        
+        # Listbox for sub-actions
+        frame = tk.Frame(dialog)
+        frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        
+        sub_listbox = tk.Listbox(frame)
+        sub_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        scrollbar = tk.Scrollbar(frame, orient=tk.VERTICAL, command=sub_listbox.yview)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        sub_listbox.config(yscrollcommand=scrollbar.set)
+        
+        # Button frame for adding actions
+        btn_frame = tk.Frame(dialog)
+        btn_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        def add_click():
+            messagebox.showinfo("Record Click", "Click anywhere to record this click for sub-actions.")
+            dialog.withdraw()  # Hide dialog temporarily
+            
+            def on_click(x, y, button, pressed):
+                if pressed:
+                    action = ('click', x, y)
+                    sub_actions.append(action)
+                    sub_listbox.insert(tk.END, self._format_action(action))
+                    dialog.deiconify()  # Show dialog again
+                    return False
+            mouse.Listener(on_click=on_click).start()
+        
+        def add_delay():
+            d = simpledialog.askfloat("Delay", "Enter delay in seconds:", initialvalue=1.0)
+            if d is not None:
+                action = ('delay', d)
+                sub_actions.append(action)
+                sub_listbox.insert(tk.END, self._format_action(action))
+        
+        def add_copy():
+            action = ('copy',)
+            sub_actions.append(action)
+            sub_listbox.insert(tk.END, self._format_action(action))
+        
+        def add_paste():
+            action = ('paste',)
+            sub_actions.append(action)
+            sub_listbox.insert(tk.END, self._format_action(action))
+        
+        def remove_action():
+            selection = sub_listbox.curselection()
+            if selection:
+                idx = selection[0]
+                sub_actions.pop(idx)
+                sub_listbox.delete(idx)
+        
+        # Action buttons
+        tk.Button(btn_frame, text="Add Click", command=add_click).pack(side=tk.LEFT, padx=2)
+        tk.Button(btn_frame, text="Add Delay", command=add_delay).pack(side=tk.LEFT, padx=2)
+        tk.Button(btn_frame, text="Add Copy", command=add_copy).pack(side=tk.LEFT, padx=2)
+        tk.Button(btn_frame, text="Add Paste", command=add_paste).pack(side=tk.LEFT, padx=2)
+        tk.Button(btn_frame, text="Remove", command=remove_action).pack(side=tk.LEFT, padx=2)
+        
+        # Done button
+        def done():
+            dialog.destroy()
+        
+        tk.Button(dialog, text="Done", command=done, font=("Arial", 12, "bold")).pack(pady=10)
+        
+        # Wait for dialog to be closed
+        dialog.wait_window()
+        
+        return sub_actions
+
+    # File operations and UI setup methods continue here...
+    def new_macro(self):
+        """Create a new macro"""
+        if self.actions and not messagebox.askyesno("New Macro", "Clear current macro?"):
+            return
+        self.actions = []
+        self.listbox.delete(0, tk.END)
+        self.current_file = None
+        self.master.title("Macro Maker Pro v2.0")
+        self.update_status("New macro created")
             tk.Button(record_frame, text=text, command=cmd, width=8).grid(row=0, column=i, padx=2)
 
         # --- Action Control Buttons ---
@@ -247,6 +515,10 @@ class MacroMaker:
             return "📄 Paste (Ctrl+V)"
         elif typ == 'ocr':
             return f"👁️ OCR region: {action[1]}"
+        elif typ == 'img_check':
+            image_path = os.path.basename(action[1]) if len(action) > 1 else "unknown"
+            sub_count = len(action[3]) if len(action) > 3 else 0
+            return f"🔍 Image Check: {image_path} ({sub_count} sub-actions)"
         return str(action)
 
     def _maybe_auto_delay(self):
@@ -618,6 +890,60 @@ class MacroMaker:
                             else: 
                                 # Silent failure - just update status bar  
                                 self.master.after(0, lambda: self.update_status("OCR: No 6-9 digit number found"))
+                                
+                        elif typ == 'img_check':
+                            # Image check with branching logic
+                            image_path, (x1, y1, x2, y2), sub_actions, threshold = act[1], act[2], act[3], act[4]
+                            left, top = min(x1, x2), min(y1, y2)
+                            width, height = abs(x2 - x1), abs(y2 - y1)
+                            
+                            # Take screenshot of the region
+                            with mss.mss() as sct:
+                                monitor = {'top': top, 'left': left, 'width': width, 'height': height}
+                                sct_img = sct.grab(monitor)
+                                img = Image.frombytes('RGB', sct_img.size, sct_img.rgb)
+                            
+                            # Compare with reference image
+                            image_found = self._compare_images(image_path, img, threshold)
+                            
+                            img_name = os.path.basename(image_path)
+                            if image_found:
+                                # Execute sub-actions when image is found
+                                self.master.after(0, lambda n=img_name: self.update_status(f"Image found: {n} - executing sub-actions"))
+                                print(f"Image found: {img_name} - executing {len(sub_actions)} sub-actions")
+                                
+                                # Execute each sub-action
+                                for sub_act in sub_actions:
+                                    if not self.macro_running:
+                                        break
+                                        
+                                    sub_typ = sub_act[0]
+                                    try:
+                                        if sub_typ == 'click':
+                                            _, sx, sy = sub_act
+                                            pyautogui.click(sx, sy)
+                                        elif sub_typ == 'drag':
+                                            _, (sx1, sy1), (sx2, sy2) = sub_act
+                                            pyautogui.mouseDown(sx1, sy1)
+                                            pyautogui.moveTo(sx2, sy2, duration=0.1)
+                                            pyautogui.mouseUp()
+                                        elif sub_typ == 'delay':
+                                            delay_time = sub_act[1]
+                                            steps = max(1, int(delay_time * 10))
+                                            for _ in range(steps):
+                                                if not self.macro_running:
+                                                    break
+                                                time.sleep(delay_time / steps)
+                                        elif sub_typ == 'copy':
+                                            pyautogui.hotkey('ctrl', 'c')
+                                        elif sub_typ == 'paste':
+                                            pyautogui.hotkey('ctrl', 'v')
+                                    except Exception as sub_e:
+                                        print(f"Error executing sub-action {sub_typ}: {sub_e}")
+                            else:
+                                # Image not found - continue with main flow
+                                self.master.after(0, lambda n=img_name: self.update_status(f"Image not found: {n} - continuing main flow"))
+                                print(f"Image not found: {img_name} - continuing with main macro")
                                 
                     except Exception as e:
                         error_msg = f"Error executing {typ} action: {str(e)}"
