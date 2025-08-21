@@ -897,65 +897,108 @@ class MacroMaker:
     # === IMAGE PROCESSING ===
 
     def _compare_images(self, reference_path, screenshot_region, threshold=0.8):
-        """Compare reference image with screenshot region using template matching"""
+        """Optimized image comparison with caching and performance improvements"""
         try:
-            # Load reference image
+            # Cache reference images to avoid repeated loading
+            if not hasattr(self, '_image_cache'):
+                self._image_cache = {}
+            
             if not os.path.exists(reference_path):
                 print(f"Reference image not found: {reference_path}")
                 return False
-                
-            ref_img = Image.open(reference_path)
-            ref_array = np.array(ref_img)
             
-            # Convert screenshot region to numpy array
+            # Load and cache reference image
+            if reference_path not in self._image_cache:
+                ref_img = Image.open(reference_path)
+                # Resize large images to improve performance (max 300x300)
+                if ref_img.width > 300 or ref_img.height > 300:
+                    ref_img.thumbnail((300, 300), Image.Resampling.LANCZOS)
+                
+                # Convert to grayscale immediately and cache
+                ref_array = np.array(ref_img)
+                if len(ref_array.shape) == 3:
+                    ref_gray = np.dot(ref_array[...,:3], [0.299, 0.587, 0.114]).astype(np.uint8)
+                else:
+                    ref_gray = ref_array.astype(np.uint8)
+                
+                self._image_cache[reference_path] = ref_gray
+            else:
+                ref_gray = self._image_cache[reference_path]
+            
+            # Optimize screenshot processing
             screen_array = np.array(screenshot_region)
             
-            # Convert to grayscale for template matching
-            if len(ref_array.shape) == 3:
-                ref_gray = np.dot(ref_array[...,:3], [0.299, 0.587, 0.114])
-            else:
-                ref_gray = ref_array
-                
-            if len(screen_array.shape) == 3:
-                screen_gray = np.dot(screen_array[...,:3], [0.299, 0.587, 0.114])
-            else:
-                screen_gray = screen_array
+            # Resize screenshot if too large for performance
+            if screen_array.shape[0] > 600 or screen_array.shape[1] > 600:
+                # Calculate scale to keep under 600px
+                scale = min(600/screen_array.shape[0], 600/screen_array.shape[1])
+                new_height = int(screen_array.shape[0] * scale)
+                new_width = int(screen_array.shape[1] * scale)
+                screenshot_region = screenshot_region.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                screen_array = np.array(screenshot_region)
             
-            # Simple correlation-based matching
+            # Convert to grayscale efficiently
+            if len(screen_array.shape) == 3:
+                screen_gray = np.dot(screen_array[...,:3], [0.299, 0.587, 0.114]).astype(np.uint8)
+            else:
+                screen_gray = screen_array.astype(np.uint8)
+            
+            # Quick size check
             if ref_gray.shape[0] > screen_gray.shape[0] or ref_gray.shape[1] > screen_gray.shape[1]:
                 return False
             
-            # Calculate normalized cross-correlation
+            # Use faster template matching approach
             try:
-                from scipy import ndimage
-                # Use scipy if available for better matching
-                correlation = ndimage.correlate(screen_gray, ref_gray, mode='constant')
-                max_correlation = correlation.max()
-                
-                # Normalize correlation value
-                ref_sum = (ref_gray ** 2).sum()
-                screen_sum = (screen_gray ** 2).sum()
-                
-                if ref_sum == 0 or screen_sum == 0:
-                    return False
-                    
-                normalized_correlation = max_correlation / (ref_sum * screen_sum) ** 0.5
+                import cv2
+                # OpenCV template matching is much faster than scipy
+                result = cv2.matchTemplate(screen_gray, ref_gray, cv2.TM_CCOEFF_NORMED)
+                _, max_val, _, _ = cv2.minMaxLoc(result)
+                normalized_correlation = max_val
                 
             except ImportError:
-                # Fallback to simple pixel-by-pixel comparison
-                if ref_gray.shape != screen_gray.shape:
-                    # Resize reference to match screen region
-                    ref_img_resized = ref_img.resize(screen_array.shape[1::-1])
-                    ref_array_resized = np.array(ref_img_resized)
-                    if len(ref_array_resized.shape) == 3:
-                        ref_gray = np.dot(ref_array_resized[...,:3], [0.299, 0.587, 0.114])
+                try:
+                    from scipy import ndimage
+                    # Downsample for faster correlation if images are large
+                    if ref_gray.size > 10000:  # If reference is larger than 100x100
+                        scale = 0.5
+                        ref_small = ndimage.zoom(ref_gray, scale, order=1)
+                        screen_small = ndimage.zoom(screen_gray, scale, order=1)
                     else:
-                        ref_gray = ref_array_resized
-                
-                # Simple pixel difference calculation
-                diff = np.abs(ref_gray - screen_gray)
-                similarity = 1.0 - (diff.mean() / 255.0)
-                normalized_correlation = similarity
+                        ref_small = ref_gray
+                        screen_small = screen_gray
+                    
+                    # Simple normalized cross-correlation
+                    correlation = ndimage.correlate(screen_small, ref_small, mode='constant')
+                    max_correlation = correlation.max()
+                    
+                    # Normalize
+                    ref_norm = np.sqrt(np.sum(ref_small ** 2))
+                    screen_norm = np.sqrt(np.sum(screen_small ** 2))
+                    
+                    if ref_norm == 0 or screen_norm == 0:
+                        return False
+                    
+                    normalized_correlation = max_correlation / (ref_norm * screen_norm)
+                    
+                except ImportError:
+                    # Fastest fallback: resize and compare directly
+                    if ref_gray.shape != screen_gray.shape:
+                        # Resize to smaller of the two for speed
+                        target_shape = (min(ref_gray.shape[0], screen_gray.shape[0], 100),
+                                      min(ref_gray.shape[1], screen_gray.shape[1], 100))
+                        
+                        ref_resized = np.array(Image.fromarray(ref_gray).resize(
+                            (target_shape[1], target_shape[0]), Image.Resampling.LANCZOS))
+                        screen_resized = np.array(Image.fromarray(screen_gray).resize(
+                            (target_shape[1], target_shape[0]), Image.Resampling.LANCZOS))
+                    else:
+                        ref_resized = ref_gray
+                        screen_resized = screen_gray
+                    
+                    # Fast similarity calculation
+                    diff = np.abs(ref_resized.astype(float) - screen_resized.astype(float))
+                    similarity = 1.0 - (diff.mean() / 255.0)
+                    normalized_correlation = similarity
             
             print(f"Image similarity: {normalized_correlation:.3f}, threshold: {threshold}")
             return normalized_correlation >= threshold
@@ -1178,11 +1221,42 @@ class MacroMaker:
                             left, top = min(x1, x2), min(y1, y2)
                             width, height = abs(x2 - x1), abs(y2 - y1)
                             
-                            # Take screenshot of the region
-                            with mss.mss() as sct:
-                                monitor = {'top': top, 'left': left, 'width': width, 'height': height}
-                                sct_img = sct.grab(monitor)
-                                img = Image.frombytes('RGB', sct_img.size, sct_img.rgb)
+                            # Take screenshot of the region with multi-screen support
+                            try:
+                                with mss.mss() as sct:
+                                    # Get all monitors to handle multi-screen setups
+                                    monitors = sct.monitors
+                                    
+                                    # Find which monitor contains our region
+                                    target_monitor = None
+                                    for i, monitor in enumerate(monitors[1:], 1):  # Skip monitor[0] (all monitors)
+                                        if (left >= monitor['left'] and top >= monitor['top'] and
+                                            left + width <= monitor['left'] + monitor['width'] and
+                                            top + height <= monitor['top'] + monitor['height']):
+                                            target_monitor = i
+                                            break
+                                    
+                                    # Capture region with proper monitor context
+                                    if target_monitor:
+                                        # Adjust coordinates relative to the specific monitor
+                                        mon = monitors[target_monitor]
+                                        monitor_region = {
+                                            'top': top,
+                                            'left': left, 
+                                            'width': width,
+                                            'height': height,
+                                            'mon': target_monitor
+                                        }
+                                    else:
+                                        # Fallback to absolute coordinates
+                                        monitor_region = {'top': top, 'left': left, 'width': width, 'height': height}
+                                    
+                                    sct_img = sct.grab(monitor_region)
+                                    img = Image.frombytes('RGB', sct_img.size, sct_img.rgb)
+                            except Exception as capture_error:
+                                print(f"Screenshot capture error: {capture_error}")
+                                # Fallback to pyautogui for compatibility
+                                img = pyautogui.screenshot(region=(left, top, width, height))
                             
                             # Compare with reference image
                             image_found = self._compare_images(image_path, img, threshold)
