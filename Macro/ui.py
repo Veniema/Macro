@@ -577,60 +577,64 @@ class MacroMaker:
 
         mouse.Listener(on_click=on_click).start()
 
-        def _finish_img_check_recording(self, coords: List[tuple[int, int]], image_path: str) -> None:
-            (x1, y1), (x2, y2) = coords
+    def _finish_img_check_recording(
+        self,
+        coords: List[tuple[int, int]],
+        image_path: str,
+    ) -> None:
+        (x1, y1), (x2, y2) = coords
 
-            threshold = simpledialog.askfloat(
-                "Image Similarity",
-                "Enter similarity threshold (0.0-1.0, higher = more strict):",
-                initialvalue=0.8,
+        threshold = simpledialog.askfloat(
+            "Image Similarity",
+            "Enter similarity threshold (0.0-1.0, higher = more strict):",
+            initialvalue=0.8,
+            minvalue=0.0,
+            maxvalue=1.0,
+        )
+        if threshold is None:
+            threshold = 0.8
+
+        # Ask if this image check should wait until the image appears
+        wait_until_found = messagebox.askyesno(
+            "Wait Until Found?",
+            "Do you want this Image Check to keep checking until the image is found?\n\n"
+            "Yes = poll the region until the image appears.\n"
+            "No  = check once and continue.",
+        )
+
+        max_wait_seconds = 0.0
+        if wait_until_found:
+            # NEW: Ask for a maximum wait time (in minutes, 0 = no limit)
+            max_wait_minutes = simpledialog.askfloat(
+                "Max Wait Time",
+                "Maximum wait time (minutes, 0 = no limit):",
+                initialvalue=1.0,  # 1 minute default
                 minvalue=0.0,
-                maxvalue=1.0,
             )
-            if threshold is None:
-                threshold = 0.8
+            if max_wait_minutes is None:
+                max_wait_minutes = 1.0
+            max_wait_seconds = float(max_wait_minutes) * 60.0
 
-            # Ask if this image check should wait until the image appears
-            wait_until_found = messagebox.askyesno(
-                "Wait Until Found?",
-                "Do you want this Image Check to keep checking until the image is found?\n\n"
-                "Yes = poll the region until the image appears.\n"
-                "No  = check once and continue.",
-            )
+        sub_actions = self._create_sub_actions_dialog()
 
-            max_wait_seconds = 0.0
-            if wait_until_found:
-                # NEW: Ask for a maximum wait time (in minutes, 0 = no limit)
-                max_wait_minutes = simpledialog.askfloat(
-                    "Max Wait Time",
-                    "Maximum wait time (minutes, 0 = no limit):",
-                    initialvalue=1.0,   # 1 minute default
-                    minvalue=0.0,
-                )
-                if max_wait_minutes is None:
-                    max_wait_minutes = 1.0
-                max_wait_seconds = float(max_wait_minutes) * 60.0
+        # Backward-compatible storage of config: either float or dict
+        if wait_until_found:
+            config = {
+                "threshold": float(threshold),
+                "wait": True,
+                "interval": 0.5,  # polling interval in seconds
+                "timeout": max_wait_seconds,  # 0 = no timeout; else seconds
+            }
+        else:
+            config = float(threshold)
 
-            sub_actions = self._create_sub_actions_dialog()
+        action = ("img_check", image_path, (x1, y1, x2, y2), sub_actions, config)
+        self.actions.append(action)
+        self.listbox.insert(tk.END, format_action(action))
+        self._maybe_auto_delay()
 
-            # Backward-compatible storage of config: either float or dict
-            if wait_until_found:
-                config = {
-                    "threshold": float(threshold),
-                    "wait": True,
-                    "interval": 0.5,        # polling interval in seconds
-                    "timeout": max_wait_seconds,  # 0 = no timeout; else seconds
-                }
-            else:
-                config = float(threshold)
-
-            action = ("img_check", image_path, (x1, y1, x2, y2), sub_actions, config)
-            self.actions.append(action)
-            self.listbox.insert(tk.END, format_action(action))
-            self._maybe_auto_delay()
-
-            img_name = os.path.basename(image_path)
-            self.update_status(f"Image check added: {img_name} with {len(sub_actions)} sub-actions")
+        img_name = os.path.basename(image_path)
+        self.update_status(f"Image check added: {img_name} with {len(sub_actions)} sub-actions")
 
 
     def _create_sub_actions_dialog(self) -> List[Action]:
