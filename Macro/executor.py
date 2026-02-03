@@ -422,6 +422,9 @@ class MacroExecutor:
             raise RuntimeError(f"Malformed img_check action: {action}")
 
         _, image_path, coords, sub_actions, cfg = action
+        if not os.path.exists(str(image_path)):
+            self._status(f"Image check skipped: file not found ({image_path})")
+            return
 
         try:
             x1, y1, x2, y2 = coords
