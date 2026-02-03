@@ -353,6 +353,455 @@ class MacroMaker:
 
         mouse.Listener(on_click=on_click).start()
 
+    def _repick_drag(self, idx: int) -> None:
+        """Let the user click start/end to set new coordinates for a drag action."""
+        self.update_status("Click start then end to set new drag coordinates…")
+        messagebox.showinfo("Edit Drag", "Click start then end to set the new drag coordinates.")
+
+        coords: List[tuple[int, int]] = []
+
+        def on_click(x, y, button, pressed):
+            if pressed:
+                coords.append((int(x), int(y)))
+                if len(coords) == 2:
+                    (x1, y1), (x2, y2) = coords
+                    self.actions[idx] = ("drag", (x1, y1), (x2, y2))
+
+                    def _update():
+                        self.listbox.delete(idx)
+                        self.listbox.insert(idx, format_action(self.actions[idx]))
+                        self.listbox.select_clear(0, tk.END)
+                        self.listbox.select_set(idx)
+                        self.update_status("Drag edited")
+
+                    self.master.after(0, _update)
+                    return False
+
+        mouse.Listener(on_click=on_click).start()
+
+    def _pick_region(self, title: str, prompt: str, callback) -> None:
+        """Capture a region with mouse press/release and pass it to callback."""
+        self.update_status(prompt)
+        messagebox.showinfo(title, prompt)
+
+        coords: List[tuple[int, int]] = []
+
+        def on_click(x, y, button, pressed):
+            if pressed:
+                coords.clear()
+                coords.append((int(x), int(y)))
+            else:
+                coords.append((int(x), int(y)))
+                if len(coords) == 2:
+                    (x1, y1), (x2, y2) = coords
+                    self.master.after(0, lambda: callback((x1, y1, x2, y2)))
+                    return False
+
+        mouse.Listener(on_click=on_click).start()
+
+    def _edit_key_action(self, idx: int, act: Action) -> None:
+        """Edit an existing key action."""
+        dialog = tk.Toplevel(self.master)
+        dialog.title("Edit Keyboard Command")
+        dialog.geometry("360x260")
+        dialog.transient(self.master)
+        dialog.grab_set()
+
+        try:
+            known = sorted(pyautogui.KEYBOARD_KEYS)
+        except Exception:
+            known = []
+
+        key_var = tk.StringVar(value=str(act[1]) if len(act) > 1 else "down")
+        count_var = tk.IntVar(value=int(act[2]) if len(act) > 2 else 1)
+        interval_var = tk.DoubleVar(value=float(act[3]) if len(act) > 3 else 0.05)
+
+        frm = tk.Frame(dialog)
+        frm.pack(fill="both", expand=True, padx=12, pady=12)
+
+        tk.Label(frm, text="Key name:").grid(row=0, column=0, sticky="w")
+        key_entry = tk.Entry(frm, textvariable=key_var, width=18)
+        key_entry.grid(row=0, column=1, sticky="w")
+
+        tk.Label(frm, text="Common:").grid(row=1, column=0, sticky="nw", pady=(8, 0))
+        common_list = tk.Listbox(frm, height=8, width=18, exportselection=False)
+        for k in [
+            "up",
+            "down",
+            "left",
+            "right",
+            "enter",
+            "tab",
+            "esc",
+            "space",
+            "backspace",
+            "delete",
+            "home",
+            "end",
+            "pageup",
+            "pagedown",
+        ]:
+            common_list.insert(tk.END, k)
+        common_list.grid(row=1, column=1, sticky="w", pady=(8, 0))
+
+        def pick_key(_evt=None):
+            sel = common_list.curselection()
+            if sel:
+                key_var.set(common_list.get(sel[0]))
+
+        common_list.bind("<<ListboxSelect>>", pick_key)
+
+        tk.Label(frm, text="Count:").grid(row=2, column=0, sticky="w", pady=(10, 0))
+        tk.Spinbox(frm, from_=1, to=999, textvariable=count_var, width=6).grid(
+            row=2, column=1, sticky="w", pady=(10, 0)
+        )
+
+        tk.Label(frm, text="Interval (s):").grid(row=3, column=0, sticky="w", pady=(6, 0))
+        tk.Entry(frm, textvariable=interval_var, width=8).grid(
+            row=3, column=1, sticky="w", pady=(6, 0)
+        )
+
+        btns = tk.Frame(dialog)
+        btns.pack(pady=10)
+
+        def save_action():
+            key = key_var.get().strip().lower()
+            try:
+                cnt = max(1, int(count_var.get()))
+            except Exception:
+                cnt = 1
+            try:
+                iv = float(interval_var.get())
+            except ValueError:
+                iv = 0.0
+
+            try:
+                known_keys = sorted(pyautogui.KEYBOARD_KEYS)
+            except Exception:
+                known_keys = []
+            if known_keys and key not in known_keys:
+                messagebox.showwarning(
+                    "Unknown Key",
+                    f"'{key}' is not a recognized key.\n\n"
+                    f"Try one of: {', '.join(known_keys[:20])} ...",
+                )
+                return
+
+            self.actions[idx] = ("key", key, cnt, iv)
+            self.listbox.delete(idx)
+            self.listbox.insert(idx, format_action(self.actions[idx]))
+            self.listbox.select_clear(0, tk.END)
+            self.listbox.select_set(idx)
+            self.update_status(f"Key action edited: {key} ×{cnt}")
+            dialog.destroy()
+
+        tk.Button(btns, text="Save", command=save_action, bg="#4CAF50", fg="white").pack(
+            side="left", padx=6
+        )
+        tk.Button(btns, text="Cancel", command=dialog.destroy).pack(side="left", padx=6)
+
+        key_entry.focus_set()
+
+    def _edit_hotkey_action(self, idx: int, act: Action) -> None:
+        """Edit an existing hotkey action."""
+        existing = " + ".join(str(k) for k in act[1:]) if len(act) > 1 else ""
+        new_keys = simpledialog.askstring(
+            "Edit Hotkey",
+            "Enter keys separated by + or commas (e.g., ctrl+shift+s):",
+            initialvalue=existing,
+        )
+        if not new_keys:
+            return
+        parts = [p.strip().lower() for p in new_keys.replace(",", "+").split("+") if p.strip()]
+        if not parts:
+            return
+        self.actions[idx] = tuple(["hotkey", *parts])
+        self.listbox.delete(idx)
+        self.listbox.insert(idx, format_action(self.actions[idx]))
+        self.listbox.select_clear(0, tk.END)
+        self.listbox.select_set(idx)
+        self.update_status(f"Hotkey edited → {' + '.join(parts)}")
+
+    def _edit_ocr_action(self, idx: int, act: Action) -> None:
+        """Edit an existing OCR action."""
+        try:
+            region = act[1]
+            mode = act[2]
+            pattern = act[3]
+            processing = act[4]
+        except Exception:
+            messagebox.showerror("Edit OCR", "Invalid OCR action format.")
+            return
+
+        dialog = tk.Toplevel(self.master)
+        dialog.title("Edit OCR Configuration")
+        dialog.geometry("520x440")
+        dialog.transient(self.master)
+        dialog.grab_set()
+
+        mode_var = tk.StringVar(value=mode)
+        pattern_var = tk.StringVar(value=pattern)
+        processing_var = tk.StringVar(value=processing)
+        region_var = tk.StringVar(value=f"{region[0]}, {region[1]} → {region[2]}, {region[3]}")
+
+        tk.Label(dialog, text="OCR Configuration", font=("Arial", 14, "bold")).pack(pady=10)
+
+        region_frame = tk.LabelFrame(dialog, text="Region", padx=10, pady=6)
+        region_frame.pack(fill="x", padx=10, pady=5)
+        tk.Label(region_frame, textvariable=region_var).pack(side="left")
+
+        def repick_region():
+            def apply_region(new_region):
+                nonlocal region
+                region = new_region
+                region_var.set(f"{region[0]}, {region[1]} → {region[2]}, {region[3]}")
+                self.update_status("OCR region updated")
+
+            self._pick_region(
+                "Edit OCR Region",
+                "Click upper-left then release lower-right to define OCR region.",
+                apply_region,
+            )
+
+        tk.Button(region_frame, text="Repick Region", command=repick_region).pack(
+            side="right"
+        )
+
+        mode_frame = tk.LabelFrame(dialog, text="What to Extract", padx=10, pady=10)
+        mode_frame.pack(fill="x", padx=10, pady=5)
+
+        tk.Radiobutton(
+            mode_frame, text="All text (copy everything)", variable=mode_var, value="all_text"
+        ).pack(anchor="w")
+        tk.Radiobutton(
+            mode_frame, text="Numbers only (any digits found)", variable=mode_var, value="numbers"
+        ).pack(anchor="w")
+        tk.Radiobutton(
+            mode_frame, text="Email addresses", variable=mode_var, value="email"
+        ).pack(anchor="w")
+        tk.Radiobutton(
+            mode_frame, text="Custom pattern (regex)", variable=mode_var, value="custom"
+        ).pack(anchor="w")
+
+        pattern_frame = tk.LabelFrame(dialog, text="Custom Pattern (if selected)", padx=10, pady=10)
+        pattern_frame.pack(fill="x", padx=10, pady=5)
+
+        tk.Label(pattern_frame, text="Regex pattern:").pack(anchor="w")
+        pattern_entry = tk.Entry(pattern_frame, textvariable=pattern_var, width=50)
+        pattern_entry.pack(fill="x", pady=2)
+
+        process_frame = tk.LabelFrame(dialog, text="What to do with extracted text", padx=10, pady=10)
+        process_frame.pack(fill="x", padx=10, pady=5)
+
+        tk.Radiobutton(
+            process_frame, text="Copy to clipboard", variable=processing_var, value="copy"
+        ).pack(anchor="w")
+        tk.Radiobutton(
+            process_frame,
+            text="Save to variable (show in status)",
+            variable=processing_var,
+            value="show",
+        ).pack(anchor="w")
+        tk.Radiobutton(
+            process_frame,
+            text="Copy first match only",
+            variable=processing_var,
+            value="first",
+        ).pack(anchor="w")
+        tk.Radiobutton(
+            process_frame,
+            text="Copy all matches (separated by spaces)",
+            variable=processing_var,
+            value="all",
+        ).pack(anchor="w")
+
+        button_frame = tk.Frame(dialog)
+        button_frame.pack(pady=16)
+
+        def save_ocr():
+            new_mode = mode_var.get()
+            new_pattern = pattern_var.get() if new_mode == "custom" else ""
+            new_processing = processing_var.get()
+
+            if new_mode == "custom" and not new_pattern:
+                messagebox.showwarning("Missing Pattern", "Please enter a regex pattern for custom mode.")
+                return
+
+            self.actions[idx] = ("ocr", region, new_mode, new_pattern, new_processing)
+            self.listbox.delete(idx)
+            self.listbox.insert(idx, format_action(self.actions[idx]))
+            self.listbox.select_clear(0, tk.END)
+            self.listbox.select_set(idx)
+            self.update_status("OCR action edited")
+            dialog.destroy()
+
+        tk.Button(
+            button_frame,
+            text="Save OCR Action",
+            command=save_ocr,
+            bg="#4CAF50",
+            fg="white",
+            font=("Arial", 10, "bold"),
+        ).pack(side="left", padx=5)
+        tk.Button(button_frame, text="Cancel", command=dialog.destroy).pack(side="left", padx=5)
+
+        pattern_entry.focus_set()
+
+    def _edit_img_check_action(self, idx: int, act: Action) -> None:
+        """Edit an existing image check action."""
+        try:
+            image_path = act[1]
+            region = act[2]
+            sub_actions = list(act[3])
+            config = act[4]
+        except Exception:
+            messagebox.showerror("Edit Image Check", "Invalid image check action format.")
+            return
+
+        if isinstance(config, dict):
+            threshold_val = float(config.get("threshold", 0.8))
+            wait_val = bool(config.get("wait", True))
+            interval_val = float(config.get("interval", 0.5))
+            timeout_val = float(config.get("timeout", 0.0))
+        else:
+            threshold_val = float(config)
+            wait_val = False
+            interval_val = 0.5
+            timeout_val = 0.0
+
+        dialog = tk.Toplevel(self.master)
+        dialog.title("Edit Image Check")
+        dialog.geometry("560x420")
+        dialog.transient(self.master)
+        dialog.grab_set()
+
+        image_var = tk.StringVar(value=image_path)
+        threshold_var = tk.DoubleVar(value=threshold_val)
+        wait_var = tk.BooleanVar(value=wait_val)
+        interval_var = tk.DoubleVar(value=interval_val)
+        timeout_var = tk.DoubleVar(value=timeout_val / 60.0)
+        region_var = tk.StringVar(value=f"{region[0]}, {region[1]} → {region[2]}, {region[3]}")
+
+        tk.Label(dialog, text="Image Check Configuration", font=("Arial", 13, "bold")).pack(pady=10)
+
+        img_frame = tk.LabelFrame(dialog, text="Reference Image", padx=10, pady=6)
+        img_frame.pack(fill="x", padx=10, pady=5)
+        tk.Entry(img_frame, textvariable=image_var, width=50).pack(side="left", padx=4)
+
+        def browse_image():
+            path = filedialog.askopenfilename(
+                filetypes=[
+                    ("Image files", "*.png *.jpg *.jpeg *.bmp *.gif"),
+                    ("All files", "*.*"),
+                ],
+                title="Select Reference Image",
+            )
+            if path:
+                image_var.set(path)
+
+        tk.Button(img_frame, text="Browse", command=browse_image).pack(side="right")
+
+        region_frame = tk.LabelFrame(dialog, text="Search Region", padx=10, pady=6)
+        region_frame.pack(fill="x", padx=10, pady=5)
+        tk.Label(region_frame, textvariable=region_var).pack(side="left")
+
+        def repick_region():
+            def apply_region(new_region):
+                nonlocal region
+                region = new_region
+                region_var.set(f"{region[0]}, {region[1]} → {region[2]}, {region[3]}")
+                self.update_status("Image check region updated")
+
+            self._pick_region(
+                "Edit Search Region",
+                "Click and drag to define the region where the image should be found.",
+                apply_region,
+            )
+
+        tk.Button(region_frame, text="Repick Region", command=repick_region).pack(side="right")
+
+        settings_frame = tk.LabelFrame(dialog, text="Matching Settings", padx=10, pady=8)
+        settings_frame.pack(fill="x", padx=10, pady=5)
+
+        tk.Label(settings_frame, text="Similarity threshold (0-1):").grid(row=0, column=0, sticky="w")
+        tk.Entry(settings_frame, textvariable=threshold_var, width=8).grid(row=0, column=1, sticky="w")
+
+        tk.Checkbutton(settings_frame, text="Wait until found", variable=wait_var).grid(
+            row=1, column=0, sticky="w", pady=(8, 0)
+        )
+
+        tk.Label(settings_frame, text="Check interval (s):").grid(row=2, column=0, sticky="w", pady=(6, 0))
+        tk.Entry(settings_frame, textvariable=interval_var, width=8).grid(row=2, column=1, sticky="w", pady=(6, 0))
+
+        tk.Label(settings_frame, text="Max wait (minutes, 0 = no limit):").grid(
+            row=3, column=0, sticky="w", pady=(6, 0)
+        )
+        tk.Entry(settings_frame, textvariable=timeout_var, width=8).grid(row=3, column=1, sticky="w", pady=(6, 0))
+
+        actions_frame = tk.LabelFrame(dialog, text="Sub-actions (on match)", padx=10, pady=6)
+        actions_frame.pack(fill="x", padx=10, pady=5)
+
+        sub_actions_label = tk.Label(actions_frame, text=f"{len(sub_actions)} action(s) configured")
+        sub_actions_label.pack(side="left")
+
+        def edit_sub_actions():
+            nonlocal sub_actions
+            sub_actions = self._create_sub_actions_dialog(sub_actions)
+            sub_actions_label.config(text=f"{len(sub_actions)} action(s) configured")
+
+        tk.Button(actions_frame, text="Edit Sub-actions", command=edit_sub_actions).pack(
+            side="right"
+        )
+
+        btn_frame = tk.Frame(dialog)
+        btn_frame.pack(pady=14)
+
+        def save_img_check():
+            path = image_var.get().strip()
+            if not path:
+                messagebox.showwarning("Missing Image", "Please select a reference image.")
+                return
+            try:
+                threshold = float(threshold_var.get())
+            except Exception:
+                threshold = 0.8
+            threshold = max(0.0, min(1.0, threshold))
+
+            if wait_var.get():
+                try:
+                    interval = float(interval_var.get())
+                except Exception:
+                    interval = 0.5
+                try:
+                    timeout_minutes = float(timeout_var.get())
+                except Exception:
+                    timeout_minutes = 0.0
+                config_value = {
+                    "threshold": float(threshold),
+                    "wait": True,
+                    "interval": max(0.05, float(interval)),
+                    "timeout": max(0.0, float(timeout_minutes) * 60.0),
+                }
+            else:
+                config_value = float(threshold)
+
+            self.actions[idx] = ("img_check", path, region, sub_actions, config_value)
+            self.listbox.delete(idx)
+            self.listbox.insert(idx, format_action(self.actions[idx]))
+            self.listbox.select_clear(0, tk.END)
+            self.listbox.select_set(idx)
+            self.update_status("Image check action edited")
+            dialog.destroy()
+
+        tk.Button(
+            btn_frame,
+            text="Save Image Check",
+            command=save_img_check,
+            bg="#4CAF50",
+            fg="white",
+            font=("Arial", 10, "bold"),
+        ).pack(side="left", padx=5)
+        tk.Button(btn_frame, text="Cancel", command=dialog.destroy).pack(side="left", padx=5)
     def record_click(self) -> None:
         """Record a mouse click"""
         self.update_status("Click anywhere to record this click...")
@@ -637,9 +1086,9 @@ class MacroMaker:
         self.update_status(f"Image check added: {img_name} with {len(sub_actions)} sub-actions")
 
 
-    def _create_sub_actions_dialog(self) -> List[Action]:
+    def _create_sub_actions_dialog(self, initial_actions: Sequence[Action] | None = None) -> List[Action]:
         """Create a dialog to define sub-actions for image check branching"""
-        sub_actions: List[Action] = []
+        sub_actions: List[Action] = list(initial_actions or [])
 
         dialog = tk.Toplevel(self.master)
         dialog.title("Define Sub-Actions")
@@ -662,6 +1111,8 @@ class MacroMaker:
         scrollbar = tk.Scrollbar(frame, orient=tk.VERTICAL, command=sub_listbox.yview)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         sub_listbox.config(yscrollcommand=scrollbar.set)
+        for action in sub_actions:
+            sub_listbox.insert(tk.END, format_action(action))
 
         btn_frame = tk.Frame(dialog)
         btn_frame.pack(fill=tk.X, padx=10, pady=5)
@@ -1117,6 +1568,60 @@ class MacroMaker:
             self.listbox.select_clear(0, tk.END)
             self.listbox.select_set(idx)
             self.update_status(f"Click edited → ({int(new_x)}, {int(new_y)})")
+            return
+
+        if typ == "drag":
+            try:
+                (x1, y1), (x2, y2) = act[1], act[2]
+                x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+            except Exception:
+                x1 = y1 = x2 = y2 = 0
+
+            repick = messagebox.askyesno(
+                "Edit Drag",
+                "Do you want to re-pick the drag start/end on screen?\n\n"
+                "Yes = click start then end\nNo = type numbers manually",
+            )
+
+            if repick:
+                self._repick_drag(idx)
+                return
+
+            new_x1 = simpledialog.askinteger("Edit Drag", "Start X:", initialvalue=x1)
+            if new_x1 is None:
+                return
+            new_y1 = simpledialog.askinteger("Edit Drag", "Start Y:", initialvalue=y1)
+            if new_y1 is None:
+                return
+            new_x2 = simpledialog.askinteger("Edit Drag", "End X:", initialvalue=x2)
+            if new_x2 is None:
+                return
+            new_y2 = simpledialog.askinteger("Edit Drag", "End Y:", initialvalue=y2)
+            if new_y2 is None:
+                return
+
+            self.actions[idx] = ("drag", (int(new_x1), int(new_y1)), (int(new_x2), int(new_y2)))
+            self.listbox.delete(idx)
+            self.listbox.insert(idx, format_action(self.actions[idx]))
+            self.listbox.select_clear(0, tk.END)
+            self.listbox.select_set(idx)
+            self.update_status("Drag edited")
+            return
+
+        if typ == "key":
+            self._edit_key_action(idx, act)
+            return
+
+        if typ == "ocr":
+            self._edit_ocr_action(idx, act)
+            return
+
+        if typ == "img_check":
+            self._edit_img_check_action(idx, act)
+            return
+
+        if typ == "hotkey":
+            self._edit_hotkey_action(idx, act)
             return
 
         messagebox.showinfo("Edit", f"Editing '{typ}' actions is not yet supported.")
