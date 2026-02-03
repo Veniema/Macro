@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import time
 import os
+import threading
 from typing import Callable, Optional, List, Sequence, Any, Tuple
 
 import pyautogui
@@ -38,6 +39,7 @@ import mss
 from PIL import Image
 import pytesseract
 import pyperclip
+from pynput import keyboard
 
 from image_ocr import match_template, process_ocr_text
 
@@ -256,6 +258,9 @@ class MacroExecutor:
         elif typ == "img_check":
             self._execute_img_check(action)
 
+        elif typ == "wait_key":
+            self._execute_wait_key(action)
+
         else:
             self._status(f"Unknown action type: {typ}")
 
@@ -315,6 +320,65 @@ class MacroExecutor:
             pyautogui.press(key_name, presses=count, interval=interval)
         except Exception as e:
             print(f"[MacroExecutor] Key press error: {e}")
+
+    def _execute_wait_key(self, action: Action) -> None:
+        # ('wait_key', key_name)
+        try:
+            _, key_name = action
+            key_name = str(key_name).strip().lower()
+        except Exception as e:
+            raise RuntimeError(f"Malformed wait_key action: {action} ({e})")
+
+        expected = self._parse_wait_key(key_name)
+        if expected is None:
+            self._status(f"Wait key skipped: unknown key '{key_name}'")
+            return
+
+        self._status(f"Waiting for key: {key_name}...")
+        pressed_event = threading.Event()
+
+        def on_press(key: keyboard.Key | keyboard.KeyCode) -> Optional[bool]:
+            if not self._running:
+                return False
+            if self._key_matches(expected, key):
+                pressed_event.set()
+                return False
+            return None
+
+        with keyboard.Listener(on_press=on_press) as listener:
+            while self._running and not pressed_event.is_set():
+                time.sleep(0.05)
+            listener.stop()
+
+        if self._running and pressed_event.is_set():
+            self._status(f"Received key: {key_name}")
+
+    def _parse_wait_key(self, key_name: str) -> keyboard.Key | keyboard.KeyCode | None:
+        if not key_name:
+            return None
+
+        if len(key_name) == 1:
+            return keyboard.KeyCode.from_char(key_name)
+
+        aliases = {
+            "escape": "esc",
+            "esc": "esc",
+            "return": "enter",
+            "ctrl": "ctrl",
+            "control": "ctrl",
+            "altgr": "alt_gr",
+        }
+        resolved = aliases.get(key_name, key_name)
+        return getattr(keyboard.Key, resolved, None)
+
+    def _key_matches(
+        self,
+        expected: keyboard.Key | keyboard.KeyCode,
+        actual: keyboard.Key | keyboard.KeyCode,
+    ) -> bool:
+        if isinstance(expected, keyboard.KeyCode):
+            return isinstance(actual, keyboard.KeyCode) and actual.char == expected.char
+        return actual == expected
 
     # --- OCR ----------------------------------------------------------- #
 

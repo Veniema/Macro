@@ -80,6 +80,14 @@ def format_action(action: Action) -> str:
         except Exception:
             return f"⌨️ Key (malformed: {action})"
 
+    elif typ == "wait_key":
+        # ('wait_key', key_name)
+        try:
+            key = str(action[1])
+            return f"⏸️ Wait for key: {key}"
+        except Exception:
+            return f"⏸️ Wait for key (malformed: {action})"
+
     # --- OCR actions ---
 
     elif typ == "ocr":

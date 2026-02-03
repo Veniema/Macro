@@ -162,7 +162,7 @@ class MacroMaker:
             font=self.fonts["section"],
             fg=self.theme["text"],
             bg=self.theme["card_bg"],
-        ).grid(row=0, column=0, columnspan=9, sticky="w", pady=(6, 8), padx=8)
+        ).grid(row=0, column=0, columnspan=10, sticky="w", pady=(6, 8), padx=8)
 
         record_btns = [
             ("🖱️ Click", self.record_click),
@@ -173,6 +173,7 @@ class MacroMaker:
             ("👁️ OCR", self.record_ocr),
             ("🔍 Img Check", self.record_img_check),
             ("⌨️ Key", self.record_key),
+            ("⏸️ Wait Key", self.record_wait_key),
         ]
 
         for i, (text, cmd) in enumerate(record_btns):
@@ -671,6 +672,83 @@ class MacroMaker:
             self.listbox.select_clear(0, tk.END)
             self.listbox.select_set(idx)
             self.update_status(f"Key action edited: {key} ×{cnt}")
+            dialog.destroy()
+
+        tk.Button(btns, text="Save", command=save_action, bg="#4CAF50", fg="white").pack(
+            side="left", padx=6
+        )
+        tk.Button(btns, text="Cancel", command=dialog.destroy).pack(side="left", padx=6)
+
+        key_entry.focus_set()
+
+    def _edit_wait_key_action(self, idx: int, act: Action) -> None:
+        """Edit an existing wait-for-key action."""
+        dialog = tk.Toplevel(self.master)
+        dialog.title("Edit Wait Key")
+        dialog.geometry("320x240")
+        dialog.transient(self.master)
+        dialog.grab_set()
+
+        try:
+            known = sorted(pyautogui.KEYBOARD_KEYS)
+        except Exception:
+            known = []
+
+        key_var = tk.StringVar(value=str(act[1]) if len(act) > 1 else "f8")
+
+        frm = tk.Frame(dialog)
+        frm.pack(fill="both", expand=True, padx=12, pady=12)
+
+        tk.Label(frm, text="Key name:").grid(row=0, column=0, sticky="w")
+        key_entry = tk.Entry(frm, textvariable=key_var, width=18)
+        key_entry.grid(row=0, column=1, sticky="w")
+
+        tk.Label(frm, text="Common:").grid(row=1, column=0, sticky="nw", pady=(8, 0))
+        common_list = tk.Listbox(frm, height=8, width=18, exportselection=False)
+        for k in [
+            "enter",
+            "tab",
+            "esc",
+            "space",
+            "backspace",
+            "delete",
+            "home",
+            "end",
+            "pageup",
+            "pagedown",
+        ] + [f"f{i}" for i in range(1, 13)]:
+            common_list.insert(tk.END, k)
+        common_list.grid(row=1, column=1, sticky="w", pady=(8, 0))
+
+        def pick_key(_evt=None):
+            sel = common_list.curselection()
+            if sel:
+                key_var.set(common_list.get(sel[0]))
+
+        common_list.bind("<<ListboxSelect>>", pick_key)
+
+        btns = tk.Frame(dialog)
+        btns.pack(pady=10)
+
+        def save_action():
+            key = key_var.get().strip().lower()
+            if not key:
+                messagebox.showwarning("Missing Key", "Please enter a key to wait for.")
+                return
+            if known and key not in known:
+                messagebox.showwarning(
+                    "Unknown Key",
+                    f"'{key}' is not a recognized key.\n\n"
+                    f"Try one of: {', '.join(known[:20])} ...",
+                )
+                return
+
+            self.actions[idx] = ("wait_key", key)
+            self.listbox.delete(idx)
+            self.listbox.insert(idx, format_action(self.actions[idx]))
+            self.listbox.select_clear(0, tk.END)
+            self.listbox.select_set(idx)
+            self.update_status(f"Wait key edited: {key}")
             dialog.destroy()
 
         tk.Button(btns, text="Save", command=save_action, bg="#4CAF50", fg="white").pack(
@@ -1478,6 +1556,94 @@ class MacroMaker:
 
         key_entry.focus_set()
 
+    def record_wait_key(self) -> None:
+        """Create a wait-for-key action that pauses playback until pressed."""
+        dialog = tk.Toplevel(self.master)
+        dialog.title("Add Wait Key")
+        dialog.geometry("320x240")
+        dialog.transient(self.master)
+        dialog.grab_set()
+
+        try:
+            known = sorted(pyautogui.KEYBOARD_KEYS)
+        except Exception:
+            known = [
+                "enter",
+                "tab",
+                "esc",
+                "space",
+                "backspace",
+                "delete",
+                "home",
+                "end",
+                "pageup",
+                "pagedown",
+            ] + [f"f{i}" for i in range(1, 13)]
+
+        key_var = tk.StringVar(value="f8")
+
+        frm = tk.Frame(dialog)
+        frm.pack(fill="both", expand=True, padx=12, pady=12)
+
+        tk.Label(frm, text="Key name:").grid(row=0, column=0, sticky="w")
+        key_entry = tk.Entry(frm, textvariable=key_var, width=18)
+        key_entry.grid(row=0, column=1, sticky="w")
+
+        tk.Label(frm, text="Common:").grid(row=1, column=0, sticky="nw", pady=(8, 0))
+        common_list = tk.Listbox(frm, height=8, width=18, exportselection=False)
+        for k in [
+            "enter",
+            "tab",
+            "esc",
+            "space",
+            "backspace",
+            "delete",
+            "home",
+            "end",
+            "pageup",
+            "pagedown",
+        ] + [f"f{i}" for i in range(1, 13)]:
+            common_list.insert(tk.END, k)
+        common_list.grid(row=1, column=1, sticky="w", pady=(8, 0))
+
+        def pick_key(_evt=None):
+            sel = common_list.curselection()
+            if sel:
+                key_var.set(common_list.get(sel[0]))
+
+        common_list.bind("<<ListboxSelect>>", pick_key)
+
+        btns = tk.Frame(dialog)
+        btns.pack(pady=10)
+
+        def add_action():
+            key = key_var.get().strip().lower()
+            if not key:
+                messagebox.showwarning("Missing Key", "Please enter a key to wait for.")
+                return
+
+            if known and key not in known:
+                messagebox.showwarning(
+                    "Unknown Key",
+                    f"'{key}' is not a recognized key.\n\n"
+                    f"Try one of: {', '.join(known[:20])} ...",
+                )
+                return
+
+            action = ("wait_key", key)
+            self.actions.append(action)
+            self.listbox.insert(tk.END, format_action(action))
+            self._maybe_auto_delay()
+            self.update_status(f"Wait key added: {key}")
+            dialog.destroy()
+
+        tk.Button(btns, text="Add", command=add_action, bg="#4CAF50", fg="white").pack(
+            side="left", padx=6
+        )
+        tk.Button(btns, text="Cancel", command=dialog.destroy).pack(side="left", padx=6)
+
+        key_entry.focus_set()
+
     # ------------------------------------------------------------------ #
     # Quick actions
     # ------------------------------------------------------------------ #
@@ -1788,6 +1954,10 @@ class MacroMaker:
 
         if typ == "key":
             self._edit_key_action(idx, act)
+            return
+
+        if typ == "wait_key":
+            self._edit_wait_key_action(idx, act)
             return
 
         if typ == "ocr":
