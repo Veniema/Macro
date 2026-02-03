@@ -1,4 +1,5 @@
 import tkinter as tk
+from tkinter import font as tkfont
 from tkinter import simpledialog, messagebox, filedialog
 import threading
 import json
@@ -20,7 +21,8 @@ class MacroMaker:
     def __init__(self, master: tk.Tk):
         self.master = master
         master.title("Macro Maker Pro v2.2.1 - Complete Edition")
-        master.geometry("900x700")
+        master.geometry("960x720")
+        master.minsize(900, 650)
 
         # Actions are tuples/lists describing the macro steps
         self.actions: List[Action] = []
@@ -37,6 +39,29 @@ class MacroMaker:
 
         # File tracking
         self.current_file: str | None = None
+
+        # Theme settings
+        self.theme = {
+            "bg": "#f4f6fb",
+            "card_bg": "#ffffff",
+            "border": "#d8dce6",
+            "text": "#1f2937",
+            "muted": "#6b7280",
+            "primary": "#3b82f6",
+            "primary_dark": "#2563eb",
+            "danger": "#ef4444",
+            "danger_dark": "#dc2626",
+            "accent": "#10b981",
+        }
+        self.fonts = {
+            "title": tkfont.Font(family="Segoe UI", size=18, weight="bold"),
+            "subtitle": tkfont.Font(family="Segoe UI", size=10),
+            "section": tkfont.Font(family="Segoe UI", size=10, weight="bold"),
+            "button": tkfont.Font(family="Segoe UI", size=9, weight="bold"),
+            "body": tkfont.Font(family="Segoe UI", size=9),
+            "mono": tkfont.Font(family="Consolas", size=10),
+        }
+        self.master.configure(bg=self.theme["bg"])
 
         # Build UI
         self._setup_ui()
@@ -61,6 +86,7 @@ class MacroMaker:
     def _setup_ui(self) -> None:
         """Initialize the user interface"""
         self._create_menu()
+        self._create_header()
         self._create_status_bar()
         self._create_recording_buttons()
         self._create_quick_actions()
@@ -82,17 +108,61 @@ class MacroMaker:
         file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self.master.quit)
 
+    def _create_header(self) -> None:
+        """Create top header with app title"""
+        header = tk.Frame(self.master, bg=self.theme["bg"])
+        header.pack(fill=tk.X, padx=16, pady=(12, 6))
+
+        title = tk.Label(
+            header,
+            text="Macro Maker Pro",
+            font=self.fonts["title"],
+            fg=self.theme["text"],
+            bg=self.theme["bg"],
+        )
+        title.pack(anchor=tk.W)
+
+        subtitle = tk.Label(
+            header,
+            text="Record, edit, and replay automation sequences with confidence.",
+            font=self.fonts["subtitle"],
+            fg=self.theme["muted"],
+            bg=self.theme["bg"],
+        )
+        subtitle.pack(anchor=tk.W)
+
     def _create_status_bar(self) -> None:
         """Create the status bar"""
-        status_frame = tk.Frame(self.master)
-        status_frame.pack(fill=tk.X, padx=5, pady=2)
-        self.status_label = tk.Label(status_frame, text="Ready", relief=tk.SUNKEN, anchor=tk.W)
+        status_frame = tk.Frame(self.master, bg=self.theme["bg"])
+        status_frame.pack(fill=tk.X, padx=16, pady=(0, 8))
+        self.status_label = tk.Label(
+            status_frame,
+            text="Ready",
+            relief=tk.FLAT,
+            anchor=tk.W,
+            bg=self.theme["card_bg"],
+            fg=self.theme["muted"],
+            font=self.fonts["body"],
+            padx=10,
+            pady=6,
+            bd=1,
+            highlightthickness=1,
+            highlightbackground=self.theme["border"],
+        )
         self.status_label.pack(fill=tk.X)
 
     def _create_recording_buttons(self) -> None:
         """Create the main recording buttons"""
-        record_frame = tk.Frame(self.master)
-        record_frame.pack(pady=4)
+        record_frame = tk.Frame(self.master, bg=self.theme["card_bg"])
+        record_frame.pack(fill=tk.X, padx=16, pady=6)
+
+        tk.Label(
+            record_frame,
+            text="Record Actions",
+            font=self.fonts["section"],
+            fg=self.theme["text"],
+            bg=self.theme["card_bg"],
+        ).grid(row=0, column=0, columnspan=9, sticky="w", pady=(6, 8), padx=8)
 
         record_btns = [
             ("🖱️ Click", self.record_click),
@@ -106,14 +176,21 @@ class MacroMaker:
         ]
 
         for i, (text, cmd) in enumerate(record_btns):
-            tk.Button(record_frame, text=text, command=cmd, width=10).grid(row=0, column=i, padx=2)
+            btn = self._styled_button(record_frame, text=text, command=cmd)
+            btn.grid(row=1, column=i, padx=4, pady=(0, 8))
 
     def _create_quick_actions(self) -> None:
         """Create quick action buttons for common sequences"""
-        quick_frame = tk.Frame(self.master)
-        quick_frame.pack(pady=2)
+        quick_frame = tk.Frame(self.master, bg=self.theme["card_bg"])
+        quick_frame.pack(fill=tk.X, padx=16, pady=6)
 
-        tk.Label(quick_frame, text="Quick Actions:", font=("Arial", 9, "bold")).pack(side=tk.LEFT, padx=5)
+        tk.Label(
+            quick_frame,
+            text="Quick Actions",
+            font=self.fonts["section"],
+            fg=self.theme["text"],
+            bg=self.theme["card_bg"],
+        ).pack(side=tk.LEFT, padx=8, pady=6)
 
         candidates = [
             ("Click + Copy", "_quick_click_copy"),
@@ -124,13 +201,27 @@ class MacroMaker:
         ]
         for text, meth in candidates:
             if hasattr(self, meth):
-                tk.Button(quick_frame, text=text, command=getattr(self, meth),
-                          font=("Arial", 8), pady=1).pack(side=tk.LEFT, padx=1)
+                self._styled_button(
+                    quick_frame,
+                    text=text,
+                    command=getattr(self, meth),
+                    style="secondary",
+                    padx=10,
+                    pady=4,
+                ).pack(side=tk.LEFT, padx=4, pady=6)
 
     def _create_control_buttons(self) -> None:
         """Create action control buttons"""
-        control_frame = tk.Frame(self.master)
-        control_frame.pack(pady=4)
+        control_frame = tk.Frame(self.master, bg=self.theme["card_bg"])
+        control_frame.pack(fill=tk.X, padx=16, pady=6)
+
+        tk.Label(
+            control_frame,
+            text="Edit Actions",
+            font=self.fonts["section"],
+            fg=self.theme["text"],
+            bg=self.theme["card_bg"],
+        ).grid(row=0, column=0, columnspan=7, sticky="w", pady=(6, 8), padx=8)
 
         control_btns = [
             ("✏️ Edit", self.edit_action),
@@ -142,66 +233,153 @@ class MacroMaker:
         ]
 
         for i, (text, cmd) in enumerate(control_btns):
-            tk.Button(control_frame, text=text, command=cmd, width=10).grid(row=0, column=i, padx=2)
+            btn = self._styled_button(control_frame, text=text, command=cmd, style="secondary")
+            btn.grid(row=1, column=i, padx=4, pady=(0, 8))
 
     def _create_execution_controls(self) -> None:
         """Create execution control panel"""
-        exec_frame = tk.Frame(self.master)
-        exec_frame.pack(pady=4)
+        exec_frame = tk.Frame(self.master, bg=self.theme["card_bg"])
+        exec_frame.pack(fill=tk.X, padx=16, pady=6)
 
-        tk.Label(exec_frame, text="Loops:").grid(row=0, column=0, padx=2)
-        tk.Button(exec_frame, text="Set Count", command=self.set_loop, width=8).grid(row=0, column=1, padx=2)
-        self.loop_label = tk.Label(exec_frame, text=f"{self.loop_count}", font=("Arial", 10, "bold"))
-        self.loop_label.grid(row=0, column=2, padx=5)
+        tk.Label(
+            exec_frame,
+            text="Playback",
+            font=self.fonts["section"],
+            fg=self.theme["text"],
+            bg=self.theme["card_bg"],
+        ).grid(row=0, column=0, columnspan=10, sticky="w", pady=(6, 8), padx=8)
 
-        tk.Checkbutton(exec_frame, text="Auto Delay", variable=self.auto_delay).grid(row=0, column=3, padx=5)
-        tk.Entry(exec_frame, textvariable=self.auto_delay_time, width=5).grid(row=0, column=4, padx=2)
-        tk.Label(exec_frame, text="s").grid(row=0, column=5)
+        tk.Label(exec_frame, text="Loops:", bg=self.theme["card_bg"], fg=self.theme["text"]).grid(
+            row=1, column=0, padx=6
+        )
+        self._styled_button(exec_frame, text="Set Count", command=self.set_loop, style="secondary").grid(
+            row=1, column=1, padx=4
+        )
+        self.loop_label = tk.Label(
+            exec_frame,
+            text=f"{self.loop_count}",
+            font=self.fonts["section"],
+            bg=self.theme["card_bg"],
+            fg=self.theme["text"],
+        )
+        self.loop_label.grid(row=1, column=2, padx=8)
+
+        tk.Checkbutton(
+            exec_frame,
+            text="Auto Delay",
+            variable=self.auto_delay,
+            bg=self.theme["card_bg"],
+            fg=self.theme["text"],
+            activebackground=self.theme["card_bg"],
+        ).grid(row=1, column=3, padx=8)
+        tk.Entry(exec_frame, textvariable=self.auto_delay_time, width=6).grid(row=1, column=4, padx=4)
+        tk.Label(exec_frame, text="s", bg=self.theme["card_bg"], fg=self.theme["text"]).grid(row=1, column=5)
 
         self.start_btn = tk.Button(
             exec_frame,
             text="▶️ Start (F5)",
             command=self.start_macro,
-            bg="#4CAF50",
+            bg=self.theme["primary"],
+            activebackground=self.theme["primary_dark"],
             fg="white",
-            font=("Arial", 10, "bold"),
-            width=12,
+            activeforeground="white",
+            font=self.fonts["button"],
+            width=14,
+            relief=tk.FLAT,
         )
-        self.start_btn.grid(row=0, column=6, padx=5)
+        self.start_btn.grid(row=1, column=6, padx=6)
 
         self.stop_btn = tk.Button(
             exec_frame,
             text="⏹️ Stop (Esc)",
             command=self.stop_macro,
-            bg="#f44336",
+            bg=self.theme["danger"],
+            activebackground=self.theme["danger_dark"],
             fg="white",
-            font=("Arial", 10, "bold"),
-            width=12,
+            activeforeground="white",
+            font=self.fonts["button"],
+            width=14,
+            relief=tk.FLAT,
             state=tk.DISABLED,
         )
-        self.stop_btn.grid(row=0, column=7, padx=5)
+        self.stop_btn.grid(row=1, column=7, padx=6)
 
-        tk.Button(exec_frame, text="🔍 Preview", command=self.preview_macro, width=8).grid(row=0, column=8, padx=2)
-        tk.Button(exec_frame, text="🗑️ Clear All", command=self.clear_actions, width=10).grid(row=0, column=9, padx=2)
+        self._styled_button(exec_frame, text="🔍 Preview", command=self.preview_macro).grid(
+            row=1, column=8, padx=4
+        )
+        self._styled_button(exec_frame, text="🗑️ Clear All", command=self.clear_actions, style="secondary").grid(
+            row=1, column=9, padx=4
+        )
 
     def _create_actions_list(self) -> None:
         """Create the actions listbox with scrollbar"""
-        list_frame = tk.Frame(self.master)
-        list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        list_frame = tk.Frame(self.master, bg=self.theme["card_bg"])
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=16, pady=(8, 16))
 
-        scrollbar = tk.Scrollbar(list_frame)
+        tk.Label(
+            list_frame,
+            text="Macro Timeline",
+            font=self.fonts["section"],
+            fg=self.theme["text"],
+            bg=self.theme["card_bg"],
+        ).pack(anchor=tk.W, padx=8, pady=(8, 4))
+
+        body = tk.Frame(list_frame, bg=self.theme["card_bg"])
+        body.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
+
+        scrollbar = tk.Scrollbar(body)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
         self.listbox = tk.Listbox(
-            list_frame,
+            body,
             width=100,
             height=15,
             yscrollcommand=scrollbar.set,
-            font=("Consolas", 10),
+            font=self.fonts["mono"],
+            bg="#f8fafc",
+            fg=self.theme["text"],
+            selectbackground="#dbeafe",
+            selectforeground=self.theme["text"],
+            relief=tk.FLAT,
+            highlightthickness=1,
+            highlightbackground=self.theme["border"],
             selectmode=tk.SINGLE,
         )
         self.listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.config(command=self.listbox.yview)
+
+    def _styled_button(
+        self,
+        parent: tk.Widget,
+        text: str,
+        command,
+        style: str = "primary",
+        padx: int = 8,
+        pady: int = 6,
+    ) -> tk.Button:
+        """Create a styled button for consistent UI."""
+        if style == "secondary":
+            bg = "#e2e8f0"
+            fg = self.theme["text"]
+            active_bg = "#cbd5f5"
+        else:
+            bg = "#eef2ff"
+            fg = self.theme["text"]
+            active_bg = "#e0e7ff"
+
+        return tk.Button(
+            parent,
+            text=text,
+            command=command,
+            bg=bg,
+            fg=fg,
+            activebackground=active_bg,
+            activeforeground=fg,
+            font=self.fonts["button"],
+            relief=tk.FLAT,
+            padx=padx,
+            pady=pady,
+        )
 
     def _setup_shortcuts(self) -> None:
         """Set up all keyboard shortcuts"""
