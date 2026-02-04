@@ -92,6 +92,8 @@ class MacroExecutor:
         self._done_cb = done_callback
 
         self._running: bool = False
+        self._current_loop_index: int = 0
+        self._effective_loop_count: int = self.loop_count
 
     # ------------------------------------------------------------------ #
     # Public control methods
@@ -136,6 +138,13 @@ class MacroExecutor:
         completed_ok = False
 
         try:
+            effective_loop_count = self._resolve_loop_count()
+            if effective_loop_count < 1:
+                self._status("Paste list is empty. Macro cannot run.")
+                if self._done_cb:
+                    self._done_cb(False)
+                return
+
             # Countdown (like the original: 3,2,1)
             for i in range(3, 0, -1):
                 if not self._running:
@@ -146,14 +155,15 @@ class MacroExecutor:
                 self._status(f"Starting in {i}...")
                 time.sleep(1.0)
 
-            total_actions = len(self.actions) * self.loop_count
+            total_actions = len(self.actions) * effective_loop_count
             action_count = 0
 
-            for loop_index in range(self.loop_count):
+            for loop_index in range(effective_loop_count):
                 if not self._running:
                     break
 
-                self._status(f"Executing loop {loop_index + 1}/{self.loop_count}")
+                self._current_loop_index = loop_index
+                self._status(f"Executing loop {loop_index + 1}/{effective_loop_count}")
 
                 for action in self.actions:
                     if not self._running:
@@ -246,6 +256,9 @@ class MacroExecutor:
         elif typ == "paste":
             pyautogui.hotkey("ctrl", "v")
 
+        elif typ == "paste_list":
+            self._execute_paste_list(action)
+
         elif typ == "hotkey":
             self._execute_hotkey(action)
 
@@ -263,6 +276,27 @@ class MacroExecutor:
 
         else:
             self._status(f"Unknown action type: {typ}")
+
+    def _resolve_loop_count(self) -> int:
+        list_lengths = [
+            len(action[1])
+            for action in self.actions
+            if len(action) > 1 and action[0] == "paste_list" and isinstance(action[1], (list, tuple))
+        ]
+        if not list_lengths:
+            self._effective_loop_count = self.loop_count
+            return self.loop_count
+        effective = min(list_lengths)
+        if effective != self.loop_count:
+            self._status(
+                f"Loop count overridden by paste list length: {effective} (was {self.loop_count})"
+            )
+        if len(set(list_lengths)) > 1:
+            self._status(
+                f"Paste list lengths differ; using shortest list length ({effective})."
+            )
+        self._effective_loop_count = effective
+        return effective
 
     # --- Basic actions ------------------------------------------------- #
 
@@ -320,6 +354,23 @@ class MacroExecutor:
             pyautogui.press(key_name, presses=count, interval=interval)
         except Exception as e:
             print(f"[MacroExecutor] Key press error: {e}")
+
+    def _execute_paste_list(self, action: Action) -> None:
+        # ('paste_list', [items])
+        try:
+            items = action[1]
+            if not isinstance(items, (list, tuple)):
+                raise ValueError("paste_list items must be a list.")
+            if not items:
+                self._status("Paste list is empty; skipping.")
+                return
+        except Exception as e:
+            raise RuntimeError(f"Malformed paste_list action: {action} ({e})")
+
+        index = min(self._current_loop_index, len(items) - 1)
+        value = str(items[index])
+        pyperclip.copy(value)
+        pyautogui.hotkey("ctrl", "v")
 
     def _execute_wait_key(self, action: Action) -> None:
         # ('wait_key', key_name)
