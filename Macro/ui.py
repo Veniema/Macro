@@ -170,6 +170,7 @@ class MacroMaker:
             ("⏱️ Delay", self.add_delay),
             ("📋 Copy", self.record_copy),
             ("📄 Paste", self.record_paste),
+            ("🧾 List Paste", self.record_paste_list),
             ("👁️ OCR", self.record_ocr),
             ("🔍 Img Check", self.record_img_check),
             ("⌨️ Key", self.record_key),
@@ -506,6 +507,62 @@ class MacroMaker:
             self.actions.append(action)
             self.listbox.insert(tk.END, format_action(action))
             self.update_status(f"Auto delay added: {d:.2f}s")
+
+    def _get_paste_list_lengths(self) -> List[int]:
+        lengths: List[int] = []
+        for action in self.actions:
+            if len(action) > 1 and action[0] == "paste_list" and isinstance(action[1], (list, tuple)):
+                lengths.append(len(action[1]))
+        return lengths
+
+    def _effective_loop_count(self) -> int:
+        lengths = self._get_paste_list_lengths()
+        if not lengths:
+            return self.loop_count
+        return min(lengths)
+
+    def _open_paste_list_dialog(
+        self,
+        title: str,
+        initial_items: List[str],
+        on_save,
+    ) -> None:
+        dialog = tk.Toplevel(self.master)
+        dialog.title(title)
+        dialog.geometry("500x360")
+        dialog.transient(self.master)
+        dialog.grab_set()
+
+        tk.Label(
+            dialog,
+            text="Enter one item per line. Each loop will paste the next item.",
+            fg=self.theme["muted"],
+            bg=self.theme["card_bg"],
+        ).pack(fill="x", padx=12, pady=(12, 6))
+
+        text_box = tk.Text(dialog, height=12, font=self.fonts["mono"], wrap=tk.NONE)
+        text_box.pack(fill="both", expand=True, padx=12, pady=6)
+        if initial_items:
+            text_box.insert(tk.END, "\n".join(initial_items))
+
+        btns = tk.Frame(dialog, bg=self.theme["card_bg"])
+        btns.pack(pady=10)
+
+        def save():
+            raw = text_box.get("1.0", tk.END)
+            items = [line.strip() for line in raw.splitlines() if line.strip()]
+            if not items:
+                messagebox.showwarning("Empty List", "Please enter at least one item.")
+                return
+            on_save(items)
+            dialog.destroy()
+
+        self._styled_button(btns, text="Save", command=save).pack(side=tk.LEFT, padx=6)
+        self._styled_button(btns, text="Cancel", command=dialog.destroy, style="secondary").pack(
+            side=tk.LEFT, padx=6
+        )
+
+        text_box.focus_set()
 
     # ------------------------------------------------------------------ #
     # Recording methods
@@ -1120,6 +1177,17 @@ class MacroMaker:
         self.listbox.insert(tk.END, format_action(action))
         self._maybe_auto_delay()
         self.update_status("Paste action added")
+
+    def record_paste_list(self) -> None:
+        """Record a paste-list action"""
+        def save_items(items: List[str]) -> None:
+            action = ("paste_list", items)
+            self.actions.append(action)
+            self.listbox.insert(tk.END, format_action(action))
+            self._maybe_auto_delay()
+            self.update_status(f"Paste list added ({len(items)} items)")
+
+        self._open_paste_list_dialog("Add Paste List", [], save_items)
 
     def record_ocr(self) -> None:
         """Record an OCR action with enhanced options"""
@@ -1972,6 +2040,23 @@ class MacroMaker:
             self._edit_hotkey_action(idx, act)
             return
 
+        if typ == "paste_list":
+            try:
+                items = list(act[1]) if len(act) > 1 else []
+            except Exception:
+                items = []
+
+            def save_items(new_items: List[str]) -> None:
+                self.actions[idx] = ("paste_list", new_items)
+                self.listbox.delete(idx)
+                self.listbox.insert(idx, format_action(self.actions[idx]))
+                self.listbox.select_clear(0, tk.END)
+                self.listbox.select_set(idx)
+                self.update_status(f"Paste list updated ({len(new_items)} items)")
+
+            self._open_paste_list_dialog("Edit Paste List", items, save_items)
+            return
+
         messagebox.showinfo("Edit", f"Editing '{typ}' actions is not yet supported.")
 
     def preview_macro(self) -> None:
@@ -1980,7 +2065,14 @@ class MacroMaker:
             messagebox.showwarning("Empty", "No actions to preview.")
             return
 
-        preview_text = f"Macro Preview - Will execute {self.loop_count} time(s):\n\n"
+        effective_loops = self._effective_loop_count()
+        preview_text = f"Macro Preview - Will execute {effective_loops} time(s):\n\n"
+        list_lengths = self._get_paste_list_lengths()
+        if list_lengths:
+            preview_text += (
+                "Note: Loop count is tied to paste list length. "
+                f"List sizes: {', '.join(str(n) for n in list_lengths)}\n\n"
+            )
         for i, action in enumerate(self.actions, 1):
             preview_text += f"{i:2d}. {format_action(action)}\n"
 
@@ -2008,7 +2100,12 @@ class MacroMaker:
         if count:
             self.loop_count = int(count)
             self.loop_label.config(text=f"{self.loop_count}")
-            self.update_status(f"Loop count set to {self.loop_count}")
+            if self._get_paste_list_lengths():
+                self.update_status(
+                    "Loop count set, but paste lists will override it during playback."
+                )
+            else:
+                self.update_status(f"Loop count set to {self.loop_count}")
 
     # ------------------------------------------------------------------ #
     # Macro execution (using MacroExecutor)
@@ -2019,6 +2116,20 @@ class MacroMaker:
         if not self.actions:
             messagebox.showwarning("Empty Macro", "No actions to execute.")
             return
+        list_lengths = self._get_paste_list_lengths()
+        if list_lengths:
+            effective_loops = self._effective_loop_count()
+            if effective_loops < 1:
+                messagebox.showwarning(
+                    "Empty Paste List",
+                    "Paste list actions must contain at least one item before running.",
+                )
+                return
+            if len(set(list_lengths)) > 1:
+                messagebox.showinfo(
+                    "Paste List Lengths",
+                    "Paste list lengths differ. Playback will use the shortest list length.",
+                )
 
         if self.macro_running:
             messagebox.showwarning("Already Running", "Macro is already running.")

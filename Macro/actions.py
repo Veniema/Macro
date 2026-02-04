@@ -64,6 +64,15 @@ def format_action(action: Action) -> str:
         # ('paste',)
         return "📄 Paste (Ctrl+V)"
 
+    elif typ == "paste_list":
+        # ('paste_list', [items])
+        try:
+            items = action[1]
+            count = len(items) if isinstance(items, (list, tuple)) else 0
+        except Exception:
+            count = 0
+        return f"🧾 Paste List ({count} item{'s' if count != 1 else ''})"
+
     elif typ == "hotkey":
         # ('hotkey', 'ctrl', 'a', 'c', ...)
         keys = [str(k) for k in action[1:]]
